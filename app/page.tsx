@@ -8,7 +8,7 @@ export default async function Home({
   const { error } = await searchParams;
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 480, margin: "80px auto", padding: "0 1rem" }}>
-      <h1>poe-tato</h1>
+      <h1>PoE-TATO</h1>
       <p style={{ color: "#666", fontSize: 14 }}>
         This product isn&apos;t affiliated with or endorsed by Grinding Gear Games in any way.
       </p>
