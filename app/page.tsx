@@ -1,10 +1,11 @@
 // app/page.tsx
 
-export default function Home({
+export default async function Home({
   searchParams,
 }: {
-  searchParams: { error?: string };
+  searchParams: Promise<{ error?: string }>;
 }) {
+  const { error } = await searchParams;
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 480, margin: "80px auto", padding: "0 1rem" }}>
       <h1>poe-tato</h1>
@@ -12,9 +13,9 @@ export default function Home({
         This product isn&apos;t affiliated with or endorsed by Grinding Gear Games in any way.
       </p>
 
-      {searchParams.error && (
+      {error && (
         <p style={{ color: "red", fontSize: 14 }}>
-          Authentication error: {searchParams.error}. Please try again.
+          Authentication error: {error}. Please try again.
         </p>
       )}
 
