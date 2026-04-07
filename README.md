@@ -48,7 +48,7 @@ Email `oauth@grindinggear.com` with:
 1. Your PoE account name (with four-digit discriminator)
 2. Your application name
 3. Client type: **Confidential**
-4. Grant types: `authorization_code`, `refresh_token`
+4. Grant types: `authorization_code`, `client_credentials`
 5. Scopes you need and why (e.g. `account:profile` — to display the user's username)
 6. Redirect URI: `https://poe-tato.vercel.app/api/callback`
 
@@ -85,6 +85,39 @@ User grants consent on PoE's site
       → redirects to /dashboard
 ```
 
+### Authorization Code + PKCE (account:* scopes)
+
+Used when your app needs to act on behalf of a specific user — the flow
+described above.
+
+### Client Credentials (service:* scopes)
+
+Used for server-to-server calls not tied to any user account — e.g. fetching
+league data, the Public Stash API, or PvP matches. No user interaction required.
+Tokens do not expire but can be revoked manually.
+
+​```ts
+// Example: app/api/service-token/route.ts
+const res = await fetch("https://www.pathofexile.com/oauth/token", {
+  method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({
+    client_id: process.env.POE_CLIENT_ID!,
+    client_secret: process.env.POE_CLIENT_SECRET!,
+    grant_type: "client_credentials",
+    scope: "service:psapi",
+  }),
+});
+const { access_token } = await res.json();
+​```
+
+> **Warning**: tokens obtained via `client_credentials` are tied to your
+> registered account's identity. Keep your `client_secret` strictly server-side.
+
+To use this grant, include `client_credentials` in the grant types listed in
+your registration email to GGG, along with the specific `service:*` scopes
+you need and why.
+
 ## Token storage
 
 - **Access token**: stored in an `httpOnly; Secure; SameSite=Lax` cookie. Valid for 28 days.
@@ -92,9 +125,7 @@ User grants consent on PoE's site
 
 ## Next steps
 
-- Wire up refresh token storage in `app/api/callback/route.ts`
 - Add a `/api/logout` route that clears the cookie
-- Add a `/api/refresh` route to exchange the refresh token for a new access token
 - Use the access token in server routes to call PoE API endpoints, e.g.:
   ```ts
   const res = await fetch("https://api.pathofexile.com/profile", {
