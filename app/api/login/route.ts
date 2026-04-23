@@ -10,7 +10,7 @@ const REDIRECT_URI = process.env.POE_REDIRECT_URI!;
 
 // Request only the scopes your application actually needs.
 // See: https://www.pathofexile.com/developer/docs/authorization#scopes
-const SCOPES = "account:profile account:characters";
+const SCOPES = "account:profile account:stashes";
 
 export async function GET() {
   // 1. Generate PKCE values

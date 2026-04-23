@@ -6,6 +6,10 @@ import { createHash, randomBytes, createHmac } from "crypto";
 
 // --- PKCE ---
 
+function base64url(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 /**
  * Generates a cryptographically random code_verifier as per RFC 7636 §4.1.
  * Must have at least 32 bytes of entropy.
@@ -19,10 +23,6 @@ export function generateCodeVerifier(): string {
  */
 export function generateCodeChallenge(verifier: string): string {
   return base64url(createHash("sha256").update(verifier).digest());
-}
-
-function base64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 // --- State tokens ---
