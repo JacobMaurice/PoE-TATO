@@ -10,9 +10,6 @@ const CLIENT_SECRET = process.env.POE_CLIENT_SECRET!;
 const REDIRECT_URI = process.env.POE_REDIRECT_URI!;
 const TOKEN_URL = "https://www.pathofexile.com/oauth/token";
 
-console.log("[debug] CLIENT_ID repr:", JSON.stringify(CLIENT_ID));
-console.log("[debug] CLIENT_ID length:", CLIENT_ID?.length);
-
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
 
