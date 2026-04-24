@@ -8,8 +8,12 @@ type StashTab = {
   type: string;
 };
 
+type StashWithItems = StashTab & {
+  items: object[];
+};
+
 export default function StashButton({ league }: { league: string }) {
-  const [stashes, setStashes] = useState<StashTab[] | null>(null);
+  const [stashes, setStashes] = useState<StashWithItems[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,13 +22,29 @@ export default function StashButton({ league }: { league: string }) {
     setError(null);
 
     try {
+      // 1. Get the list of stash tabs
       const res = await fetch(`/api/poe/stashes?league=${encodeURIComponent(league)}`);
       if (!res.ok) {
         const body = await res.json();
         throw new Error(body.error ?? "Request failed");
       }
-      const data = await res.json();
-      setStashes(data.stashes);
+      const { stashes: stashList }: { stashes: StashTab[] } = await res.json();
+
+      // 2. Fetch items for each stash tab one at a time
+      const stashesWithItems: StashWithItems[] = [];
+      for (const stash of stashList) {
+        const itemRes = await fetch(
+          `/api/poe/stashes/${stash.id}?league=${encodeURIComponent(league)}`
+        );
+        if (!itemRes.ok) {
+          stashesWithItems.push({ ...stash, items: [] });
+          continue;
+        }
+        const { stash: stashData } = await itemRes.json();
+        stashesWithItems.push({ ...stash, items: stashData.items ?? [] });
+      }
+
+setStashes(stashesWithItems);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -57,21 +77,20 @@ export default function StashButton({ league }: { league: string }) {
       )}
 
       {stashes && (
-        <ul style={{ marginTop: 16, padding: 0, listStyle: "none" }}>
-          {stashes.map((stash) => (
-            <li
-              key={stash.id}
-              style={{
-                padding: "8px 0",
-                borderBottom: "1px solid #eee",
-                fontSize: 14,
-              }}
-            >
-              <strong>{stash.name}</strong>{" "}
-              <span style={{ color: "#999" }}>({stash.type})</span>
-            </li>
-          ))}
-        </ul>
+        <pre
+          style={{
+            marginTop: 16,
+            padding: 12,
+            background: "#f5f5f5",
+            borderRadius: 6,
+            fontSize: 12,
+            overflowX: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {JSON.stringify(stashes, null, 2)}
+        </pre>
       )}
     </div>
   );
