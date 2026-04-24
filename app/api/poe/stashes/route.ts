@@ -1,11 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getStash } from "@/lib/poe-api";
+// app/api/poe/stashes/route.ts
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ stashId: string }> }
-) {
-  const { stashId } = await params;
+import { NextRequest, NextResponse } from "next/server";
+import { getStashes } from "@/lib/poe-api";
+
+export async function GET(req: NextRequest) {
   const league = req.nextUrl.searchParams.get("league");
 
   if (!league) {
@@ -13,7 +11,7 @@ export async function GET(
   }
 
   try {
-    const data = await getStash(league, stashId);
+    const data = await getStashes(league);
     return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
