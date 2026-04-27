@@ -17,7 +17,7 @@ export default async function Dashboard() {
   ]);
 
   const leagueItems = stashData.stashes
-    .filter((s) => s.league === LEAGUE && s.public)
+    .filter((s) => s.public)
     .flatMap((s) =>
       (s.items as any[]).map((item) => ({
         ...item,
@@ -30,9 +30,6 @@ export default async function Dashboard() {
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 640, margin: "80px auto", padding: "0 1rem" }}>
       <h1>Welcome, {profile.name}!</h1>
-      <p style={{ color: "#666", fontSize: 14 }}>
-        Your access token is stored securely in an httpOnly cookie.
-      </p>
 
       <StashButton league={LEAGUE} />
 
