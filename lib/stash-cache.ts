@@ -37,7 +37,7 @@ export async function getCachedPublicStashTabs(
 
   const result: StashCache = {
     ...data,
-    stashes: data.stashes.filter((s) => s.public), // Hard-coded public stashes only SHOULD PROBABLY REMOVE IN THE FUTURE
+    stashes: data.stashes.filter((s) => s.league === "Mirage"), // Hard-coded Mirage league
     fetchedAt: Date.now(),
   };
   await Promise.all([
