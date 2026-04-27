@@ -23,41 +23,27 @@ type StashCache = {
 
 type StashData = Omit<StashCache, "fetchedAt">;
 
-async function seedChangeIdFromNinja(): Promise<string> {
-  const res = await fetch("https://poe.ninja/api/data/GetStats");
-  if (!res.ok) throw new Error(`poe.ninja stats fetch failed: ${res.status}`);
-  const data = await res.json();
-  return data.next_change_id;
-}
-
 export async function getCachedPublicStashTabs(
   fetcher: (nextChangeId?: string) => Promise<StashData>
 ): Promise<StashCache> {
-  try {
-    const cached = await redis.get<StashCache>(CACHE_KEY);
-    if (cached) return cached;
+  // Return cached result if still fresh
+  const cached = await redis.get<StashCache>(CACHE_KEY);
+  if (cached) return cached;
 
-    let storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
-    if (!storedChangeId) {
-      storedChangeId = await seedChangeIdFromNinja();
-      await redis.set(CHANGE_ID_KEY, storedChangeId);
-    }
-    const data = await fetcher(storedChangeId);
+  // Load the stored change ID so we advance the river correctly
+  const storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
 
-    const result: StashCache = {
-      ...data,
-      stashes: data.stashes.filter((s) => s.league === "Mirage"),
-      fetchedAt: Date.now(),
-    };
+  const data = await fetcher(storedChangeId ?? undefined);
 
-    await Promise.all([
-      redis.set(CACHE_KEY, result, { ex: CACHE_TTL_SECONDS }),
-      redis.set(CHANGE_ID_KEY, data.next_change_id),
-    ]);
+  const result: StashCache = {
+    ...data,
+    stashes: data.stashes.filter((s) => s.league === "Mirage"), // Hard-coded Mirage league
+    fetchedAt: Date.now(),
+  };
+  await Promise.all([
+    redis.set(CACHE_KEY, result, { ex: CACHE_TTL_SECONDS }),
+    redis.set(CHANGE_ID_KEY, data.next_change_id),
+  ]);
 
-    return result;
-  } catch (err) {
-    console.error("[stash-cache] error:", err);
-    throw err;
-  }
+  return result;
 }
