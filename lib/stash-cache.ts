@@ -35,8 +35,11 @@ export async function getCachedPublicStashTabs(
 
   const data = await fetcher(storedChangeId ?? undefined);
 
-  const result: StashCache = { ...data, fetchedAt: Date.now() };
-
+  const result: StashCache = {
+    ...data,
+    stashes: data.stashes.filter((s) => s.league === "Mirage"), // Hard-coded Mirage league filter
+    fetchedAt: Date.now(),
+  };
   await Promise.all([
     redis.set(CACHE_KEY, result, { ex: CACHE_TTL_SECONDS }),
     redis.set(CHANGE_ID_KEY, data.next_change_id),

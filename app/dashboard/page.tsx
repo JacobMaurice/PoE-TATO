@@ -17,7 +17,7 @@ export default async function Dashboard() {
   ]);
 
   const leagueItems = stashData.stashes
-    .filter((s) => s.public)
+    .filter((s) => s.league === LEAGUE && s.public)
     .flatMap((s) =>
       (s.items as any[]).map((item) => ({
         ...item,
