@@ -33,27 +33,31 @@ async function seedChangeIdFromNinja(): Promise<string> {
 export async function getCachedPublicStashTabs(
   fetcher: (nextChangeId?: string) => Promise<StashData>
 ): Promise<StashCache> {
-  // Return cached result if still fresh
-  const cached = await redis.get<StashCache>(CACHE_KEY);
-  if (cached) return cached;
+  try {
+    const cached = await redis.get<StashCache>(CACHE_KEY);
+    if (cached) return cached;
 
-  // Pulls next_change_id from poe.ninja if one doesn't exist
-  let storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
-  if (!storedChangeId) {
-    storedChangeId = await seedChangeIdFromNinja();
-    await redis.set(CHANGE_ID_KEY, storedChangeId);
+    let storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
+    if (!storedChangeId) {
+      storedChangeId = await seedChangeIdFromNinja();
+      await redis.set(CHANGE_ID_KEY, storedChangeId);
+    }
+    const data = await fetcher(storedChangeId);
+
+    const result: StashCache = {
+      ...data,
+      stashes: data.stashes.filter((s) => s.league === "Mirage"),
+      fetchedAt: Date.now(),
+    };
+
+    await Promise.all([
+      redis.set(CACHE_KEY, result, { ex: CACHE_TTL_SECONDS }),
+      redis.set(CHANGE_ID_KEY, data.next_change_id),
+    ]);
+
+    return result;
+  } catch (err) {
+    console.error("[stash-cache] error:", err);
+    throw err;
   }
-  const data = await fetcher(storedChangeId);
-
-  const result: StashCache = {
-    ...data,
-    stashes: data.stashes.filter((s) => s.league === "Mirage"), // Hard-coded Mirage league filter
-    fetchedAt: Date.now(),
-  };
-  await Promise.all([
-    redis.set(CACHE_KEY, result, { ex: CACHE_TTL_SECONDS }),
-    redis.set(CHANGE_ID_KEY, data.next_change_id),
-  ]);
-
-  return result;
 }
