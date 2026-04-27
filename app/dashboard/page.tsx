@@ -46,7 +46,7 @@ export default async function Dashboard() {
               <li
                 key={i}
                 style={{
-                  background: "#1a1a1a",
+                  background: "#c7c7c7",
                   border: "1px solid #333",
                   borderRadius: 6,
                   padding: "8px 12px",
