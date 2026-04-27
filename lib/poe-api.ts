@@ -1,6 +1,7 @@
 // lib/poe-api.ts
 
 import { cookies } from "next/headers";
+import { getCachedPublicStashTabs } from "./stash-cache";
 
 const API_BASE = "https://api.pathofexile.com";
 const USER_AGENT = `OAuth ${process.env.POE_CLIENT_ID}/1.0.0 (contact: jacob.t.maurice@gmail.com)`;
@@ -8,16 +9,14 @@ const CLIENT_ID = process.env.POE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.POE_CLIENT_SECRET!;
 
 // Cache for client credentials token
-let clientCredentialsCache: {
-  token: string;
-  expiresAt: number;
-} | null = null;
+const clientCredentialsCache = new Map<string, { token: string; expiresAt: number }>();
 
 async function getClientCredentialsToken(scope: string): Promise<string> {
   const now = Date.now();
+  const cached = clientCredentialsCache.get(scope);
 
-  if (clientCredentialsCache && clientCredentialsCache.expiresAt > now) {
-    return clientCredentialsCache.token;
+  if (cached && cached.expiresAt > now) {
+    return cached.token;
   }
 
   const res = await fetch("https://www.pathofexile.com/oauth/token", {
@@ -38,12 +37,12 @@ async function getClientCredentialsToken(scope: string): Promise<string> {
 
   const data = await res.json();
 
-  clientCredentialsCache = {
+  clientCredentialsCache.set(scope, {
     token: data.access_token,
     expiresAt: now + data.expires_in * 1000 - 60_000,
-  };
+  });
 
-  return clientCredentialsCache.token;
+  return data.access_token;
 }
 
 async function getAccessToken(): Promise<string> {
@@ -53,6 +52,7 @@ async function getAccessToken(): Promise<string> {
   return token.value;
 }
 
+// Uses the logged-in user's OAuth token (for user-scoped endpoints)
 async function poeAPIFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const accessToken = await getAccessToken();
 
@@ -66,6 +66,26 @@ async function poeAPIFetch<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (res.status === 401) throw new Error("Token expired or revoked");
+  if (res.status === 403) throw new Error("Insufficient scope for this endpoint");
+  if (!res.ok) throw new Error(`GGG API error: ${res.status}`);
+
+  return res.json();
+}
+
+// Uses a client credentials token (for public/service endpoints)
+async function poeClientFetch<T>(scope: string, path: string, init?: RequestInit): Promise<T> {
+  const accessToken = await getClientCredentialsToken(scope);
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": USER_AGENT,
+      ...init?.headers,
+    },
+  });
+
+  if (res.status === 401) throw new Error("Client credentials token expired or invalid");
   if (res.status === 403) throw new Error("Insufficient scope for this endpoint");
   if (!res.ok) throw new Error(`GGG API error: ${res.status}`);
 
@@ -94,27 +114,27 @@ export async function getStash(league: string, stashId: string, realm?: "xbox" |
   return poeAPIFetch<{ stash: object }>(path);
 }
 
-export async function getPublicStashTabs(realm?: "xbox" | "sony", nextChangeId?: string) {
-  const params = new URLSearchParams();
-  if (realm) params.set("realm", realm);
-  if (nextChangeId) params.set("id", nextChangeId);
+export async function getPublicStashTabs(realm?: "xbox" | "sony") {
+  return getCachedPublicStashTabs((nextChangeId) => {
+    const params = new URLSearchParams();
+    if (realm) params.set("realm", realm);
+    if (nextChangeId) params.set("id", nextChangeId);
+    const query = params.size ? `?${params}` : "";
 
-  const query = params.size ? `?${params}` : "";
-
-  return poeAPIFetch<{
-    next_change_id: string;
-    stashes: {
-      id: string;
-      public: boolean;
-      accountName?: string;
-      stash?: string;
-      stashType: string;
-      league?: string;
-      items: object[];
-    }[];
-  }>(`/public-stash-tabs${query}`);
+    return poeClientFetch<{
+      next_change_id: string;
+      stashes: {
+        id: string;
+        public: boolean;
+        accountName?: string;
+        stash?: string;
+        stashType: string;
+        league?: string;
+        items: object[];
+      }[];
+    }>("service:psapi", `/public-stash-tabs${query}`);
+  });
 }
-
 export async function getCurrencyExchange(realm?: "xbox" | "sony" | "poe2", nextChangeId?: string) {
   const params = new URLSearchParams();
   if (realm) params.set("realm", realm);
@@ -122,16 +142,16 @@ export async function getCurrencyExchange(realm?: "xbox" | "sony" | "poe2", next
 
   const query = params.size ? `?${params}` : "";
 
-  return poeAPIFetch<{
+  return poeClientFetch<{
     next_change_id: number;
     markets: {
       league: string;
-      market_id: string; // e.g. "chaos|divine"
+      market_id: string;
       volume_traded: Record<string, number>;
       lowest_stock: Record<string, number>;
       highest_stock: Record<string, number>;
       lowest_ratio: Record<string, number>;
       highest_ratio: Record<string, number>;
     }[];
-  }>(`/currency-exchange/${query}`);
+  }>("service:cxapi", `/currency-exchange/${query}`);
 }
