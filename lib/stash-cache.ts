@@ -23,6 +23,13 @@ type StashCache = {
 
 type StashData = Omit<StashCache, "fetchedAt">;
 
+async function seedChangeIdFromNinja(): Promise<string> {
+  const res = await fetch("https://poe.ninja/api/data/GetStats");
+  if (!res.ok) throw new Error(`poe.ninja stats fetch failed: ${res.status}`);
+  const data = await res.json();
+  return data.next_change_id;
+}
+
 export async function getCachedPublicStashTabs(
   fetcher: (nextChangeId?: string) => Promise<StashData>
 ): Promise<StashCache> {
@@ -30,10 +37,13 @@ export async function getCachedPublicStashTabs(
   const cached = await redis.get<StashCache>(CACHE_KEY);
   if (cached) return cached;
 
-  // Load the stored change ID so we advance the river correctly
-  const storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
-
-  const data = await fetcher(storedChangeId ?? undefined);
+  // Pulls next_change_id from poe.ninja if one doesn't exist
+  let storedChangeId = await redis.get<string>(CHANGE_ID_KEY);
+  if (!storedChangeId) {
+    storedChangeId = await seedChangeIdFromNinja();
+    await redis.set(CHANGE_ID_KEY, storedChangeId);
+  }
+  const data = await fetcher(storedChangeId);
 
   const result: StashCache = {
     ...data,
