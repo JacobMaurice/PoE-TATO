@@ -31,12 +31,6 @@ type SortDir = "asc" | "desc";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Parses PoE trade note formats:
- *   ~price 5 chaos
- *   ~b/o 1.5 divine
- *   ~fixed 10 chaos
- */
 function parsePrice(note?: string): ParsedPrice {
   if (!note) return null;
   const m = note.match(/~(?:b\/o|price|fixed)\s+([\d.]+)\s+(\S+)/i);
@@ -61,81 +55,151 @@ function frameLabel(item: StashItem): string {
   return item.rarity ?? "Normal";
 }
 
-const RARITY_COLOR: Record<string, string> = {
-  Normal: "#c8c8c8",
-  Magic: "#8888ff",
-  Rare: "#ffff77",
-  Unique: "#af6025",
-  Gem: "#1ba29b",
-  Currency: "#aa9e82",
-  "Divination Card": "#eee",
+// PoE rarity colors matching the game's UI
+const RARITY_COLORS: Record<string, { name: string; base: string; border: string }> = {
+  Normal:            { name: "#c8c8c8", base: "#c8c8c8", border: "#696969" },
+  Magic:             { name: "#8888ff", base: "#8888ff", border: "#393984" },
+  Rare:              { name: "#ffff77", base: "#c8c800", border: "#5a5a00" },
+  Unique:            { name: "#af6025", base: "#af6025", border: "#5a3010" },
+  Gem:               { name: "#1ba29b", base: "#1ba29b", border: "#0d6b67" },
+  Currency:          { name: "#aa9e82", base: "#aa9e82", border: "#4a4432" },
+  "Divination Card": { name: "#e8e8e8", base: "#e8e8e8", border: "#555" },
 };
 
-function rarityColor(item: StashItem): string {
-  return RARITY_COLOR[frameLabel(item)] ?? "#c8c8c8";
+function rarityStyle(item: StashItem) {
+  return RARITY_COLORS[frameLabel(item)] ?? RARITY_COLORS["Normal"];
 }
 
 const CURRENCY_PRIORITY: Record<string, number> = {
-  divine: 200,
-  exalted: 80,
-  chaos: 1,
-  fusing: 0.5,
-  alch: 0.2,
-  chromatic: 0.1,
+  divine: 200, exalted: 80, chaos: 1, fusing: 0.5, alch: 0.2, chromatic: 0.1,
 };
 
-/** Approximate chaos value for sorting */
 function chaosValue(price: ParsedPrice): number {
   if (!price) return -1;
-  const rate = CURRENCY_PRIORITY[price.currency] ?? 1;
-  return price.amount * rate;
+  return price.amount * (CURRENCY_PRIORITY[price.currency] ?? 1);
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Item Card ─────────────────────────────────────────────────────────────────
 
-function PriceBadge({ price }: { price: ParsedPrice }) {
-  if (!price) return <span style={styles.noPrice}>no price</span>;
-  return (
-    <span style={styles.priceBadge}>
-      {price.amount} <span style={{ color: "#aa9e82" }}>{price.currency}</span>
-    </span>
-  );
-}
-
-function RarityPip({ item }: { item: StashItem }) {
-  return (
-    <span
-      style={{
-        ...styles.rarityPip,
-        background: rarityColor(item),
-      }}
-      title={frameLabel(item)}
-    />
-  );
-}
-
-function ItemRow({ item }: { item: StashItem }) {
+function ItemCard({ item }: { item: StashItem }) {
   const price = parsePrice(item.note);
+  const rarity = rarityStyle(item);
   const label = frameLabel(item);
+  const displayName = item.name && item.name !== item.typeLine ? item.name : null;
+  const displayType = item.typeLine || item.name;
+  const allMods = [...(item.implicitMods ?? []), ...(item.explicitMods ?? [])];
 
   return (
-    <li style={styles.row}>
-      <RarityPip item={item} />
-      <div style={styles.rowMain}>
-        <span style={{ color: rarityColor(item), fontWeight: 600, fontSize: 13 }}>
-          {item.name && item.name !== item.typeLine
-            ? `${item.name} — ${item.typeLine}`
-            : item.typeLine || item.name}
-        </span>
-        {item.ilvl !== undefined && (
-          <span style={styles.tag}>iLvl {item.ilvl}</span>
+    <li style={{
+      background: "linear-gradient(180deg, #1a1208 0%, #0d0d0d 100%)",
+      border: `1px solid ${rarity.border}`,
+      borderRadius: 4,
+      overflow: "hidden",
+      fontFamily: "'Georgia', serif",
+    }}>
+      {/* ── Header: item name + typeline ── */}
+      <div style={{
+        borderBottom: `1px solid ${rarity.border}`,
+        padding: "7px 12px 6px",
+        textAlign: "center",
+        background: "rgba(0,0,0,0.35)",
+      }}>
+        {displayName ? (
+          <>
+            <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
+              {displayName}
+            </div>
+            <div style={{ color: rarity.base, fontSize: 12, opacity: 0.8, marginTop: 1, letterSpacing: "0.03em" }}>
+              {displayType}
+            </div>
+          </>
+        ) : (
+          <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
+            {displayType}
+          </div>
         )}
-        {item.corrupted && <span style={{ ...styles.tag, color: "#e55" }}>corrupted</span>}
-        <span style={{ ...styles.tag, color: "#888" }}>{label}</span>
       </div>
-      <div style={styles.rowRight}>
-        <PriceBadge price={price} />
-        <span style={styles.account}>{item.accountName}</span>
+
+      {/* ── Body: stats + price ── */}
+      <div style={{ padding: "7px 12px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+
+        {/* Left: properties + mods */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Properties */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginBottom: allMods.length ? 5 : 0 }}>
+            {item.ilvl !== undefined && (
+              <span style={{ fontSize: 11, color: "#7f7f7f" }}>
+                Item Level: <span style={{ color: "#c8c8c8" }}>{item.ilvl}</span>
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: "#7f7f7f" }}>{label}</span>
+            {item.corrupted && (
+              <span style={{ fontSize: 11, color: "#d20000" }}>Corrupted</span>
+            )}
+          </div>
+
+          {/* Mods */}
+          {allMods.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {item.implicitMods?.map((mod, i) => (
+                <div key={`imp-${i}`} style={{ fontSize: 12, color: "#7e98b7", lineHeight: 1.4 }}>{mod}</div>
+              ))}
+              {item.implicitMods && item.implicitMods.length > 0 && item.explicitMods && item.explicitMods.length > 0 && (
+                <div style={{ borderTop: "1px solid #2a2a2a", margin: "3px 0" }} />
+              )}
+              {item.explicitMods?.map((mod, i) => (
+                <div key={`exp-${i}`} style={{ fontSize: 12, color: "#7e98b7", lineHeight: 1.4 }}>{mod}</div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right: price + seller */}
+        <div style={{
+          flexShrink: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 6,
+          minWidth: 72,
+        }}>
+          {price ? (
+            <div style={{
+              background: "rgba(0,0,0,0.5)",
+              border: "1px solid #4a4432",
+              borderRadius: 3,
+              padding: "4px 10px",
+              textAlign: "center",
+              lineHeight: 1.3,
+            }}>
+              <div style={{ fontSize: 13, color: "#c8c8c8", fontWeight: 700, fontFamily: "sans-serif" }}>
+                {price.amount % 1 === 0 ? price.amount : price.amount.toFixed(1)}
+              </div>
+              <div style={{ fontSize: 10, color: "#aa9e82", letterSpacing: "0.04em", fontFamily: "sans-serif" }}>
+                {price.currency}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 10, color: "#333", fontStyle: "italic", fontFamily: "sans-serif" }}>
+              no price
+            </div>
+          )}
+
+          {item.accountName && (
+            <div style={{
+              fontSize: 10,
+              color: "#555",
+              textAlign: "right",
+              maxWidth: 110,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontFamily: "sans-serif",
+            }}>
+              {item.accountName}
+            </div>
+          )}
+        </div>
       </div>
     </li>
   );
@@ -164,31 +228,23 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
 
     return items
       .filter((item) => {
-        // Name filter
         if (q) {
           const haystack = `${item.name} ${item.typeLine} ${item.baseType ?? ""}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
-
-        // Rarity filter
         if (rarity !== "All" && frameLabel(item) !== rarity) return false;
-
-        // Price range filter (only applies to items with a price in the selected currency)
         if (min !== null || max !== null) {
           const price = parsePrice(item.note);
           if (!price || price.currency !== currency) return false;
           if (min !== null && price.amount < min) return false;
           if (max !== null && price.amount > max) return false;
         }
-
         return true;
       })
       .sort((a, b) => {
         let cmp = 0;
         if (sortKey === "name") {
-          const an = (a.name || a.typeLine).toLowerCase();
-          const bn = (b.name || b.typeLine).toLowerCase();
-          cmp = an.localeCompare(bn);
+          cmp = (a.name || a.typeLine).toLowerCase().localeCompare((b.name || b.typeLine).toLowerCase());
         } else if (sortKey === "price") {
           cmp = chaosValue(parsePrice(a.note)) - chaosValue(parsePrice(b.note));
         } else if (sortKey === "ilvl") {
@@ -202,292 +258,109 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
   const pageItems = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("asc");
-    }
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
     setPage(0);
   }
 
-  function handleQueryChange(v: string) {
-    setQuery(v);
-    setPage(0);
-  }
-
-  function handleRarityChange(v: string) {
-    setRarity(v);
-    setPage(0);
-  }
+  const inputStyle: React.CSSProperties = {
+    background: "#0d0d0d",
+    border: "1px solid #3a3020",
+    borderRadius: 3,
+    color: "#c8c8c8",
+    fontSize: 12,
+    padding: "5px 8px",
+    outline: "none",
+    fontFamily: "sans-serif",
+  };
 
   return (
-    <section style={styles.section}>
-      <div style={styles.header}>
-        <h2 style={styles.heading}>
-          Trade Search — <span style={{ color: "#af6025" }}>{league}</span>
+    <section style={{ marginTop: 32, fontFamily: "sans-serif" }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
+        <h2 style={{
+          margin: 0, fontSize: 15, fontWeight: 700,
+          color: "#c8a84b", letterSpacing: "0.06em",
+          fontFamily: "'Georgia', serif",
+        }}>
+          Trade Search — {league}
         </h2>
-        <span style={styles.count}>{filtered.length} items</span>
+        <span style={{ fontSize: 11, color: "#444", fontFamily: "monospace" }}>{filtered.length} items</span>
       </div>
 
-      {/* ── Filters ── */}
-      <div style={styles.filters}>
-        {/* Name search */}
+      {/* Filters */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
         <input
-          style={styles.input}
+          style={{ ...inputStyle, flex: "1 1 180px" }}
           type="text"
           placeholder="Search item name…"
           value={query}
-          onChange={(e) => handleQueryChange(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setPage(0); }}
         />
-
-        {/* Rarity */}
-        <select
-          style={styles.select}
-          value={rarity}
-          onChange={(e) => handleRarityChange(e.target.value)}
-        >
-          {RARITY_OPTIONS.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
+        <select style={{ ...inputStyle, cursor: "pointer" }} value={rarity}
+          onChange={(e) => { setRarity(e.target.value); setPage(0); }}>
+          {RARITY_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
-
-        {/* Price range */}
-        <div style={styles.priceRow}>
-          <input
-            style={{ ...styles.input, width: 80 }}
-            type="number"
-            min={0}
-            placeholder="Min"
-            value={minPrice}
-            onChange={(e) => { setMinPrice(e.target.value); setPage(0); }}
-          />
-          <span style={{ color: "#666", fontSize: 12 }}>–</span>
-          <input
-            style={{ ...styles.input, width: 80 }}
-            type="number"
-            min={0}
-            placeholder="Max"
-            value={maxPrice}
-            onChange={(e) => { setMaxPrice(e.target.value); setPage(0); }}
-          />
-          <select
-            style={styles.select}
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value)}
-          >
-            {["chaos", "divine", "exalted", "alch", "fusing", "chromatic"].map((c) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <input style={{ ...inputStyle, width: 70 }} type="number" min={0} placeholder="Min"
+            value={minPrice} onChange={(e) => { setMinPrice(e.target.value); setPage(0); }} />
+          <span style={{ color: "#444", fontSize: 12 }}>–</span>
+          <input style={{ ...inputStyle, width: 70 }} type="number" min={0} placeholder="Max"
+            value={maxPrice} onChange={(e) => { setMaxPrice(e.target.value); setPage(0); }} />
+          <select style={{ ...inputStyle, cursor: "pointer" }} value={currency}
+            onChange={(e) => setCurrency(e.target.value)}>
+            {["chaos", "divine", "exalted", "alch", "fusing", "chromatic"].map((c) =>
               <option key={c} value={c}>{c}</option>
-            ))}
+            )}
           </select>
         </div>
       </div>
 
-      {/* ── Sort bar ── */}
-      <div style={styles.sortBar}>
-        <span style={{ color: "#555", fontSize: 11, marginRight: 8 }}>Sort:</span>
+      {/* Sort bar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 12 }}>
+        <span style={{ fontSize: 11, color: "#444", marginRight: 4 }}>Sort:</span>
         {(["name", "price", "ilvl"] as SortKey[]).map((key) => (
-          <button
-            key={key}
-            style={{
-              ...styles.sortBtn,
-              ...(sortKey === key ? styles.sortBtnActive : {}),
-            }}
-            onClick={() => toggleSort(key)}
-          >
-            {key} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
+          <button key={key} onClick={() => toggleSort(key)} style={{
+            background: "none",
+            border: `1px solid ${sortKey === key ? "#8a6a20" : "#2a2a2a"}`,
+            borderRadius: 3,
+            color: sortKey === key ? "#c8a84b" : "#555",
+            fontSize: 11,
+            padding: "2px 8px",
+            cursor: "pointer",
+            fontFamily: "sans-serif",
+          }}>
+            {key}{sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
           </button>
         ))}
       </div>
 
-      {/* ── Results ── */}
+      {/* Results */}
       {pageItems.length === 0 ? (
-        <p style={{ color: "#555", fontSize: 13, padding: "24px 0" }}>
-          No items match your filters.
-        </p>
+        <p style={{ color: "#444", fontSize: 13 }}>No items match your filters.</p>
       ) : (
-        <ul style={styles.list}>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
           {pageItems.map((item, i) => (
-            <ItemRow key={`${item.accountName}-${i}`} item={item} />
+            <ItemCard key={`${item.accountName}-${i}`} item={item} />
           ))}
         </ul>
       )}
 
-      {/* ── Pagination ── */}
+      {/* Pagination */}
       {totalPages > 1 && (
-        <div style={styles.pagination}>
-          <button
-            style={styles.pageBtn}
-            disabled={page === 0}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            ← Prev
-          </button>
-          <span style={{ color: "#555", fontSize: 12 }}>
-            {page + 1} / {totalPages}
-          </span>
-          <button
-            style={styles.pageBtn}
-            disabled={page >= totalPages - 1}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next →
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, justifyContent: "center" }}>
+          <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} style={{
+            background: "none", border: "1px solid #2a2a2a", borderRadius: 3,
+            color: "#666", fontSize: 11, padding: "3px 10px", cursor: "pointer", fontFamily: "sans-serif",
+          }}>← Prev</button>
+          <span style={{ color: "#444", fontSize: 12 }}>{page + 1} / {totalPages}</span>
+          <button disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} style={{
+            background: "none", border: "1px solid #2a2a2a", borderRadius: 3,
+            color: "#666", fontSize: 11, padding: "3px 10px", cursor: "pointer", fontFamily: "sans-serif",
+          }}>Next →</button>
         </div>
       )}
     </section>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  section: {
-    marginTop: 32,
-  },
-  header: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 12,
-    marginBottom: 16,
-  },
-  heading: {
-    fontSize: 16,
-    margin: 0,
-    fontWeight: 600,
-    color: "#ccc",
-  },
-  count: {
-    fontSize: 11,
-    color: "#555",
-    fontFamily: "monospace",
-  },
-  filters: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 10,
-  },
-  priceRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-  },
-  input: {
-    background: "#111",
-    border: "1px solid #2a2a2a",
-    borderRadius: 4,
-    color: "#ccc",
-    fontSize: 12,
-    padding: "5px 8px",
-    outline: "none",
-    flex: "1 1 180px",
-  },
-  select: {
-    background: "#111",
-    border: "1px solid #2a2a2a",
-    borderRadius: 4,
-    color: "#ccc",
-    fontSize: 12,
-    padding: "5px 6px",
-    outline: "none",
-    cursor: "pointer",
-  },
-  sortBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    marginBottom: 10,
-  },
-  sortBtn: {
-    background: "none",
-    border: "1px solid #2a2a2a",
-    borderRadius: 4,
-    color: "#555",
-    fontSize: 11,
-    padding: "2px 8px",
-    cursor: "pointer",
-    transition: "color 0.15s, border-color 0.15s",
-  },
-  sortBtnActive: {
-    color: "#af6025",
-    borderColor: "#af6025",
-  },
-  list: {
-    listStyle: "none",
-    padding: 0,
-    margin: 0,
-    display: "grid",
-    gap: 4,
-  },
-  row: {
-    background: "#111",
-    border: "1px solid #1e1e1e",
-    borderRadius: 5,
-    padding: "7px 10px",
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    transition: "border-color 0.15s",
-  },
-  rowMain: {
-    flex: 1,
-    display: "flex",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 6,
-    minWidth: 0,
-  },
-  rowRight: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: 2,
-    flexShrink: 0,
-  },
-  rarityPip: {
-    width: 6,
-    height: 6,
-    borderRadius: "50%",
-    flexShrink: 0,
-    opacity: 0.85,
-  },
-  tag: {
-    fontSize: 10,
-    color: "#555",
-    border: "1px solid #222",
-    borderRadius: 3,
-    padding: "1px 4px",
-  },
-  priceBadge: {
-    fontSize: 12,
-    color: "#ccc",
-    fontFamily: "monospace",
-    fontWeight: 600,
-  },
-  noPrice: {
-    fontSize: 11,
-    color: "#333",
-    fontStyle: "italic",
-  },
-  account: {
-    fontSize: 10,
-    color: "#444",
-  },
-  pagination: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    marginTop: 12,
-    justifyContent: "center",
-  },
-  pageBtn: {
-    background: "none",
-    border: "1px solid #2a2a2a",
-    borderRadius: 4,
-    color: "#666",
-    fontSize: 11,
-    padding: "3px 10px",
-    cursor: "pointer",
-  },
-};
