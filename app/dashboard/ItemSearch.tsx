@@ -34,41 +34,34 @@ type ParsedPrice = { amount: number; currency: string } | null;
 type SortKey = "name" | "price" | "ilvl";
 type SortDir = "asc" | "desc";
 
-// ── Filter state shape ────────────────────────────────────────────────────────
+// ── Filter state ──────────────────────────────────────────────────────────────
 
 type RangeFilter = { min: string; max: string };
-
 const emptyRange = (): RangeFilter => ({ min: "", max: "" });
 
 type Filters = {
   query: string;
-  // Type
   itemCategory: string;
   itemRarity: string;
-  // Weapon
   damage: RangeFilter;
   aps: RangeFilter;
   critChance: RangeFilter;
   dps: RangeFilter;
   physDps: RangeFilter;
   elemDps: RangeFilter;
-  // Armour
   armour: RangeFilter;
   evasion: RangeFilter;
   energyShield: RangeFilter;
   ward: RangeFilter;
   block: RangeFilter;
   basePercentile: RangeFilter;
-  // Sockets
   sockets: RangeFilter;
   links: RangeFilter;
-  // Requirements
   reqLevel: RangeFilter;
   reqStr: RangeFilter;
   reqDex: RangeFilter;
   reqInt: RangeFilter;
   charClass: string;
-  // Misc
   quality: RangeFilter;
   itemLevel: RangeFilter;
   gemLevel: RangeFilter;
@@ -78,7 +71,6 @@ type Filters = {
   split: string;
   fractured: string;
   synthesised: string;
-  // Trade
   sellerAccount: string;
   saleType: string;
   minPrice: string;
@@ -91,43 +83,22 @@ function defaultFilters(): Filters {
     query: "",
     itemCategory: "Any",
     itemRarity: "Any",
-    damage: emptyRange(),
-    aps: emptyRange(),
-    critChance: emptyRange(),
-    dps: emptyRange(),
-    physDps: emptyRange(),
-    elemDps: emptyRange(),
-    armour: emptyRange(),
-    evasion: emptyRange(),
-    energyShield: emptyRange(),
-    ward: emptyRange(),
-    block: emptyRange(),
-    basePercentile: emptyRange(),
-    sockets: emptyRange(),
-    links: emptyRange(),
-    reqLevel: emptyRange(),
-    reqStr: emptyRange(),
-    reqDex: emptyRange(),
-    reqInt: emptyRange(),
+    damage: emptyRange(), aps: emptyRange(), critChance: emptyRange(),
+    dps: emptyRange(), physDps: emptyRange(), elemDps: emptyRange(),
+    armour: emptyRange(), evasion: emptyRange(), energyShield: emptyRange(),
+    ward: emptyRange(), block: emptyRange(), basePercentile: emptyRange(),
+    sockets: emptyRange(), links: emptyRange(),
+    reqLevel: emptyRange(), reqStr: emptyRange(), reqDex: emptyRange(), reqInt: emptyRange(),
     charClass: "Any",
-    quality: emptyRange(),
-    itemLevel: emptyRange(),
-    gemLevel: emptyRange(),
-    identified: "Any",
-    corrupted: "Any",
-    mirrored: "Any",
-    split: "Any",
-    fractured: "Any",
-    synthesised: "Any",
-    sellerAccount: "",
-    saleType: "Buyout or Fixed Price",
-    minPrice: "",
-    maxPrice: "",
-    priceCurrency: "chaos",
+    quality: emptyRange(), itemLevel: emptyRange(), gemLevel: emptyRange(),
+    identified: "Any", corrupted: "Any", mirrored: "Any",
+    split: "Any", fractured: "Any", synthesised: "Any",
+    sellerAccount: "", saleType: "Buyout or Fixed Price",
+    minPrice: "", maxPrice: "", priceCurrency: "chaos",
   };
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parsePrice(note?: string): ParsedPrice {
   if (!note) return null;
@@ -180,31 +151,77 @@ function inRange(val: number | null, range: RangeFilter): boolean {
   if (range.max !== "" && val > parseFloat(range.max)) return false;
   return true;
 }
-
-function anyActive(range: RangeFilter) {
-  return range.min !== "" || range.max !== "";
-}
-
+function anyActive(range: RangeFilter) { return range.min !== "" || range.max !== ""; }
 function triState(val: boolean | undefined, filter: string): boolean {
   if (filter === "Any") return true;
   if (filter === "Yes") return !!val;
-  if (filter === "No") return !val;
-  return true;
+  return !val;
 }
 
-const ITEM_CATEGORIES = [
-  "Any", "Weapon", "Armour", "Accessory", "Flask", "Gem",
-  "Jewel", "Map", "Currency", "Card", "Heist", "Sanctum",
-];
-const RARITY_OPTIONS = ["Any", "Normal", "Magic", "Rare", "Unique"];
-const CHAR_CLASSES = ["Any", "Marauder", "Ranger", "Witch", "Duelist", "Templar", "Shadow", "Scion"];
-const SALE_TYPES = ["Any", "Buyout or Fixed Price", "Negotiable"];
-const CURRENCIES = ["chaos", "divine", "exalted", "regal", "vaal", "alch", "fusing", "alt", "chrome", "scour", "jewellers"];
-const TRI_OPTIONS = ["Any", "Yes", "No"];
+function applyFilters(items: StashItem[], f: Filters): StashItem[] {
+  return items.filter((item) => {
+    const q = f.query.trim().toLowerCase();
+    if (q) {
+      const hay = `${item.name} ${item.typeLine} ${item.baseType ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (f.itemRarity !== "Any" && frameLabel(item) !== f.itemRarity) return false;
+    if (!triState(item.identified, f.identified)) return false;
+    if (!triState(item.corrupted, f.corrupted)) return false;
+    if (!triState(item.mirrored, f.mirrored)) return false;
+    if (!triState(item.split, f.split)) return false;
+    if (!triState(item.fractured, f.fractured)) return false;
+    if (!triState(item.synthesised, f.synthesised)) return false;
+    if (anyActive(f.itemLevel) && !inRange(item.ilvl ?? null, f.itemLevel)) return false;
+    if (anyActive(f.quality) && !inRange(item.quality ?? null, f.quality)) return false;
+    if (anyActive(f.gemLevel) && !inRange(item.gemLevel ?? null, f.gemLevel)) return false;
+    if (anyActive(f.armour) && !inRange(getPropValue(item, "Armour"), f.armour)) return false;
+    if (anyActive(f.evasion) && !inRange(getPropValue(item, "Evasion Rating"), f.evasion)) return false;
+    if (anyActive(f.energyShield) && !inRange(getPropValue(item, "Energy Shield"), f.energyShield)) return false;
+    if (anyActive(f.ward) && !inRange(getPropValue(item, "Ward"), f.ward)) return false;
+    if (anyActive(f.block) && !inRange(getPropValue(item, "Chance to Block"), f.block)) return false;
+    if (anyActive(f.aps) && !inRange(getPropValue(item, "Attacks per Second"), f.aps)) return false;
+    if (anyActive(f.critChance) && !inRange(getPropValue(item, "Critical Strike Chance"), f.critChance)) return false;
+    const reqMap: Record<string, number> = {};
+    item.requirements?.forEach((r) => { reqMap[r.name] = r.value; });
+    if (anyActive(f.reqLevel) && !inRange(reqMap["Level"] ?? null, f.reqLevel)) return false;
+    if (anyActive(f.reqStr) && !inRange(reqMap["Str"] ?? null, f.reqStr)) return false;
+    if (anyActive(f.reqDex) && !inRange(reqMap["Dex"] ?? null, f.reqDex)) return false;
+    if (anyActive(f.reqInt) && !inRange(reqMap["Int"] ?? null, f.reqInt)) return false;
+    if (anyActive(f.sockets)) {
+      if (!inRange(item.sockets?.length ?? 0, f.sockets)) return false;
+    }
+    if (anyActive(f.links)) {
+      const groups: Record<number, number> = {};
+      item.sockets?.forEach((s) => { groups[s.group] = (groups[s.group] ?? 0) + 1; });
+      const maxLink = Math.max(0, ...Object.values(groups));
+      if (!inRange(maxLink, f.links)) return false;
+    }
+    if (f.sellerAccount.trim()) {
+      if (!item.accountName?.toLowerCase().includes(f.sellerAccount.trim().toLowerCase())) return false;
+    }
+    if (f.minPrice !== "" || f.maxPrice !== "") {
+      const price = parsePrice(item.note);
+      if (!price || price.currency !== f.priceCurrency) return false;
+      if (f.minPrice !== "" && price.amount < parseFloat(f.minPrice)) return false;
+      if (f.maxPrice !== "" && price.amount > parseFloat(f.maxPrice)) return false;
+    }
+    return true;
+  });
+}
 
-// ── Shared style primitives ───────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const S = {
+const ITEM_CATEGORIES = ["Any","Weapon","Armour","Accessory","Flask","Gem","Jewel","Map","Currency","Card","Heist","Sanctum"];
+const RARITY_OPTIONS  = ["Any","Normal","Magic","Rare","Unique"];
+const CHAR_CLASSES    = ["Any","Marauder","Ranger","Witch","Duelist","Templar","Shadow","Scion"];
+const SALE_TYPES      = ["Any","Buyout or Fixed Price","Negotiable"];
+const CURRENCIES      = ["chaos","divine","exalted","regal","vaal","alch","fusing","alt","chrome","scour","jewellers"];
+const TRI_OPTIONS     = ["Any","Yes","No"];
+
+// ── Shared style tokens ───────────────────────────────────────────────────────
+
+const T = {
   input: {
     background: "#0a0a0a",
     border: "1px solid #2e2410",
@@ -230,91 +247,55 @@ const S = {
     width: "100%",
     boxSizing: "border-box" as const,
   },
-  label: {
-    fontSize: 11,
-    color: "#7f6a3e",
-    display: "block",
-    marginBottom: 3,
-  } as React.CSSProperties,
+  label: { fontSize: 11, color: "#7f6a3e", display: "block", marginBottom: 3 } as React.CSSProperties,
   sectionTitle: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: "#c8a84b",
-    letterSpacing: "0.06em",
-    fontFamily: "'Georgia', serif",
-    margin: "0 0 8px 0",
-    paddingBottom: 4,
-    borderBottom: "1px solid #2e2410",
+    fontSize: 12, fontWeight: 700, color: "#c8a84b", letterSpacing: "0.06em",
+    fontFamily: "'Georgia', serif", margin: 0, paddingBottom: 4, borderBottom: "1px solid #2e2410",
+    display: "block",
   } as React.CSSProperties,
-  filterPanel: {
-    background: "#0d0b08",
-    border: "1px solid #2e2410",
-    borderRadius: 4,
-    padding: "10px 12px",
-    marginBottom: 6,
+  panel: {
+    background: "#0d0b08", border: "1px solid #2e2410", borderRadius: 4,
+    padding: "10px 12px", marginBottom: 6,
   } as React.CSSProperties,
 };
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Sidebar sub-components ────────────────────────────────────────────────────
 
-function RangeRow({
-  label, value, onChange,
-}: {
-  label: string;
-  value: RangeFilter;
-  onChange: (v: RangeFilter) => void;
-}) {
+function RangeRow({ label, value, onChange }: { label: string; value: RangeFilter; onChange: (v: RangeFilter) => void }) {
   return (
     <div style={{ marginBottom: 6 }}>
-      <label style={S.label}>{label}</label>
+      <label style={T.label}>{label}</label>
       <div style={{ display: "flex", gap: 4 }}>
-        <input style={S.input} type="number" placeholder="min" value={value.min}
+        <input style={T.input} type="number" placeholder="min" value={value.min}
           onChange={(e) => onChange({ ...value, min: e.target.value })} />
-        <input style={S.input} type="number" placeholder="max" value={value.max}
+        <input style={T.input} type="number" placeholder="max" value={value.max}
           onChange={(e) => onChange({ ...value, max: e.target.value })} />
       </div>
     </div>
   );
 }
 
-function SelectRow({
-  label, value, options, onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (v: string) => void;
-}) {
+function SelectRow({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
   return (
     <div style={{ marginBottom: 6 }}>
-      <label style={S.label}>{label}</label>
-      <select style={S.select} value={value} onChange={(e) => onChange(e.target.value)}>
+      <label style={T.label}>{label}</label>
+      <select style={T.select} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   );
 }
 
-function CollapsibleSection({
-  title, children, defaultOpen = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
+function CollapsibleSection({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={S.filterPanel}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          background: "none", border: "none", cursor: "pointer",
-          width: "100%", textAlign: "left", padding: 0,
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-        }}
-      >
-        <span style={S.sectionTitle}>{title}</span>
-        <span style={{ color: "#7f6a3e", fontSize: 12, marginTop: -4 }}>{open ? "▲" : "▼"}</span>
+    <div style={T.panel}>
+      <button onClick={() => setOpen((o) => !o)} style={{
+        background: "none", border: "none", cursor: "pointer", width: "100%",
+        textAlign: "left", padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <span style={T.sectionTitle}>{title}</span>
+        <span style={{ color: "#7f6a3e", fontSize: 11, marginTop: -2 }}>{open ? "▲" : "▼"}</span>
       </button>
       {open && <div style={{ marginTop: 8 }}>{children}</div>}
     </div>
@@ -322,11 +303,7 @@ function CollapsibleSection({
 }
 
 function TwoCol({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-      {children}
-    </div>
-  );
+  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 10px" }}>{children}</div>;
 }
 
 // ── Item Card ─────────────────────────────────────────────────────────────────
@@ -347,7 +324,6 @@ function ItemCard({ item }: { item: StashItem }) {
       overflow: "hidden",
       fontFamily: "'Georgia', serif",
     }}>
-      {/* Header */}
       <div style={{
         borderBottom: `1px solid ${rarity.border}`,
         padding: "7px 12px 6px",
@@ -356,28 +332,18 @@ function ItemCard({ item }: { item: StashItem }) {
       }}>
         {displayName ? (
           <>
-            <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
-              {displayName}
-            </div>
-            <div style={{ color: rarity.base, fontSize: 12, opacity: 0.8, marginTop: 1, letterSpacing: "0.03em" }}>
-              {displayType}
-            </div>
+            <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>{displayName}</div>
+            <div style={{ color: rarity.base, fontSize: 12, opacity: 0.8, marginTop: 1, letterSpacing: "0.03em" }}>{displayType}</div>
           </>
         ) : (
-          <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
-            {displayType}
-          </div>
+          <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>{displayType}</div>
         )}
       </div>
-
-      {/* Body */}
       <div style={{ padding: "7px 12px", display: "flex", gap: 12, alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginBottom: allMods.length ? 5 : 0 }}>
             {item.ilvl !== undefined && (
-              <span style={{ fontSize: 11, color: "#7f7f7f" }}>
-                Item Level: <span style={{ color: "#c8c8c8" }}>{item.ilvl}</span>
-              </span>
+              <span style={{ fontSize: 11, color: "#7f7f7f" }}>Item Level: <span style={{ color: "#c8c8c8" }}>{item.ilvl}</span></span>
             )}
             <span style={{ fontSize: 11, color: "#7f7f7f" }}>{label}</span>
             {item.corrupted && <span style={{ fontSize: 11, color: "#d20000" }}>Corrupted</span>}
@@ -390,39 +356,27 @@ function ItemCard({ item }: { item: StashItem }) {
               {item.implicitMods?.map((mod, i) => (
                 <div key={`imp-${i}`} style={{ fontSize: 12, color: "#7e98b7", lineHeight: 1.4 }}>{mod}</div>
               ))}
-              {item.implicitMods?.length && item.explicitMods?.length ? (
-                <div style={{ borderTop: "1px solid #2a2a2a", margin: "3px 0" }} />
-              ) : null}
+              {item.implicitMods?.length && item.explicitMods?.length
+                ? <div style={{ borderTop: "1px solid #2a2a2a", margin: "3px 0" }} /> : null}
               {item.explicitMods?.map((mod, i) => (
                 <div key={`exp-${i}`} style={{ fontSize: 12, color: "#7e98b7", lineHeight: 1.4 }}>{mod}</div>
               ))}
             </div>
           )}
         </div>
-
-        {/* Price + seller */}
         <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, minWidth: 72 }}>
           {price ? (
-            <div style={{
-              background: "rgba(0,0,0,0.5)", border: "1px solid #4a4432",
-              borderRadius: 3, padding: "4px 10px", textAlign: "center", lineHeight: 1.3,
-            }}>
+            <div style={{ background: "rgba(0,0,0,0.5)", border: "1px solid #4a4432", borderRadius: 3, padding: "4px 10px", textAlign: "center", lineHeight: 1.3 }}>
               <div style={{ fontSize: 13, color: "#c8c8c8", fontWeight: 700, fontFamily: "sans-serif" }}>
                 {price.amount % 1 === 0 ? price.amount : price.amount.toFixed(1)}
               </div>
-              <div style={{ fontSize: 10, color: "#aa9e82", letterSpacing: "0.04em", fontFamily: "sans-serif" }}>
-                {price.currency}
-              </div>
+              <div style={{ fontSize: 10, color: "#aa9e82", letterSpacing: "0.04em", fontFamily: "sans-serif" }}>{price.currency}</div>
             </div>
           ) : (
             <div style={{ fontSize: 10, color: "#333", fontStyle: "italic", fontFamily: "sans-serif" }}>no price</div>
           )}
           {item.accountName && (
-            <div style={{
-              fontSize: 10, color: "#555", textAlign: "right",
-              maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-              fontFamily: "sans-serif",
-            }}>
+            <div style={{ fontSize: 10, color: "#555", textAlign: "right", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "sans-serif" }}>
               {item.accountName}
             </div>
           )}
@@ -435,110 +389,50 @@ function ItemCard({ item }: { item: StashItem }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function ItemSearch({ items, league }: { items: StashItem[]; league: string }) {
-  const [f, setF] = useState<Filters>(defaultFilters());
+  // Draft filters — what the user is currently editing in the sidebar
+  const [draft, setDraft] = useState<Filters>(defaultFilters());
+  // Committed filters — what is actually applied to the results
+  const [committed, setCommitted] = useState<Filters>(defaultFilters());
+
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
-  const [filtersOpen, setFiltersOpen] = useState(true);
 
   const PAGE_SIZE = 25;
 
-  function setRange(key: keyof Filters, val: RangeFilter) {
-    setF((prev) => ({ ...prev, [key]: val }));
-    setPage(0);
+  function setDraftField<K extends keyof Filters>(key: K, val: Filters[K]) {
+    setDraft((prev) => ({ ...prev, [key]: val }));
   }
-  function setField<K extends keyof Filters>(key: K, val: Filters[K]) {
-    setF((prev) => ({ ...prev, [key]: val }));
+  function setDraftRange(key: keyof Filters, val: RangeFilter) {
+    setDraft((prev) => ({ ...prev, [key]: val }));
+  }
+
+  function handleSearch() {
+    setCommitted(draft);
     setPage(0);
   }
 
+  function handleClear() {
+    const fresh = defaultFilters();
+    setDraft(fresh);
+    setCommitted(fresh);
+    setPage(0);
+  }
+
+  // Only recompute when committed filters or sort changes — not on every draft keystroke
   const filtered = useMemo(() => {
-    return items
-      .filter((item) => {
-        const q = f.query.trim().toLowerCase();
-        if (q) {
-          const hay = `${item.name} ${item.typeLine} ${item.baseType ?? ""}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-
-        // Rarity
-        if (f.itemRarity !== "Any" && frameLabel(item) !== f.itemRarity) return false;
-
-        // Misc boolean filters
-        if (!triState(item.identified, f.identified)) return false;
-        if (!triState(item.corrupted, f.corrupted)) return false;
-        if (!triState(item.mirrored, f.mirrored)) return false;
-        if (!triState(item.split, f.split)) return false;
-        if (!triState(item.fractured, f.fractured)) return false;
-        if (!triState(item.synthesised, f.synthesised)) return false;
-
-        // Item level
-        if (anyActive(f.itemLevel) && !inRange(item.ilvl ?? null, f.itemLevel)) return false;
-
-        // Quality
-        if (anyActive(f.quality) && !inRange(item.quality ?? null, f.quality)) return false;
-
-        // Gem level
-        if (anyActive(f.gemLevel) && !inRange(item.gemLevel ?? null, f.gemLevel)) return false;
-
-        // Armour filters
-        if (anyActive(f.armour) && !inRange(getPropValue(item, "Armour"), f.armour)) return false;
-        if (anyActive(f.evasion) && !inRange(getPropValue(item, "Evasion Rating"), f.evasion)) return false;
-        if (anyActive(f.energyShield) && !inRange(getPropValue(item, "Energy Shield"), f.energyShield)) return false;
-        if (anyActive(f.ward) && !inRange(getPropValue(item, "Ward"), f.ward)) return false;
-        if (anyActive(f.block) && !inRange(getPropValue(item, "Chance to Block"), f.block)) return false;
-
-        // Weapon filters
-        if (anyActive(f.aps) && !inRange(getPropValue(item, "Attacks per Second"), f.aps)) return false;
-        if (anyActive(f.critChance) && !inRange(getPropValue(item, "Critical Strike Chance"), f.critChance)) return false;
-
-        // Requirements
-        const reqMap: Record<string, number> = {};
-        item.requirements?.forEach((r) => { reqMap[r.name] = r.value; });
-        if (anyActive(f.reqLevel) && !inRange(reqMap["Level"] ?? null, f.reqLevel)) return false;
-        if (anyActive(f.reqStr) && !inRange(reqMap["Str"] ?? null, f.reqStr)) return false;
-        if (anyActive(f.reqDex) && !inRange(reqMap["Dex"] ?? null, f.reqDex)) return false;
-        if (anyActive(f.reqInt) && !inRange(reqMap["Int"] ?? null, f.reqInt)) return false;
-
-        // Sockets
-        if (anyActive(f.sockets)) {
-          const count = item.sockets?.length ?? 0;
-          if (!inRange(count, f.sockets)) return false;
-        }
-        if (anyActive(f.links)) {
-          const groups: Record<number, number> = {};
-          item.sockets?.forEach((s) => { groups[s.group] = (groups[s.group] ?? 0) + 1; });
-          const maxLink = Math.max(0, ...Object.values(groups));
-          if (!inRange(maxLink, f.links)) return false;
-        }
-
-        // Seller account
-        if (f.sellerAccount.trim()) {
-          if (!item.accountName?.toLowerCase().includes(f.sellerAccount.trim().toLowerCase())) return false;
-        }
-
-        // Price filter
-        if (f.minPrice !== "" || f.maxPrice !== "") {
-          const price = parsePrice(item.note);
-          if (!price || price.currency !== f.priceCurrency) return false;
-          if (f.minPrice !== "" && price.amount < parseFloat(f.minPrice)) return false;
-          if (f.maxPrice !== "" && price.amount > parseFloat(f.maxPrice)) return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        let cmp = 0;
-        if (sortKey === "name") {
-          cmp = (a.name || a.typeLine).toLowerCase().localeCompare((b.name || b.typeLine).toLowerCase());
-        } else if (sortKey === "price") {
-          cmp = chaosValue(parsePrice(a.note)) - chaosValue(parsePrice(b.note));
-        } else if (sortKey === "ilvl") {
-          cmp = (a.ilvl ?? 0) - (b.ilvl ?? 0);
-        }
-        return sortDir === "asc" ? cmp : -cmp;
-      });
-  }, [items, f, sortKey, sortDir]);
+    return applyFilters(items, committed).sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") {
+        cmp = (a.name || a.typeLine).toLowerCase().localeCompare((b.name || b.typeLine).toLowerCase());
+      } else if (sortKey === "price") {
+        cmp = chaosValue(parsePrice(a.note)) - chaosValue(parsePrice(b.note));
+      } else if (sortKey === "ilvl") {
+        cmp = (a.ilvl ?? 0) - (b.ilvl ?? 0);
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [items, committed, sortKey, sortDir]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageItems = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -549,9 +443,9 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
     setPage(0);
   }
 
-  function clearAll() {
-    setF(defaultFilters());
-    setPage(0);
+  // Allow Enter key in the search bar to submit
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") handleSearch();
   }
 
   return (
@@ -559,143 +453,169 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
 
       {/* ── Left: filter sidebar ── */}
       <aside>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <span style={{ ...S.sectionTitle, margin: 0, borderBottom: "none", fontSize: 13 }}>Filters</span>
-          <button onClick={clearAll} style={{
-            background: "none", border: "1px solid #2e2410", borderRadius: 3,
-            color: "#7f6a3e", fontSize: 10, padding: "2px 8px", cursor: "pointer", fontFamily: "sans-serif",
-          }}>Clear All</button>
-        </div>
-
         {/* Type Filters */}
         <CollapsibleSection title="Type Filters" defaultOpen>
-          <SelectRow label="Item Category" value={f.itemCategory}
-            options={ITEM_CATEGORIES} onChange={(v) => setField("itemCategory", v)} />
-          <SelectRow label="Item Rarity" value={f.itemRarity}
-            options={RARITY_OPTIONS} onChange={(v) => setField("itemRarity", v)} />
+          <SelectRow label="Item Category" value={draft.itemCategory} options={ITEM_CATEGORIES}
+            onChange={(v) => setDraftField("itemCategory", v)} />
+          <SelectRow label="Item Rarity" value={draft.itemRarity} options={RARITY_OPTIONS}
+            onChange={(v) => setDraftField("itemRarity", v)} />
         </CollapsibleSection>
 
         {/* Weapon Filters */}
         <CollapsibleSection title="Weapon Filters">
           <TwoCol>
-            <RangeRow label="Damage" value={f.damage} onChange={(v) => setRange("damage", v)} />
-            <RangeRow label="Attacks per Second" value={f.aps} onChange={(v) => setRange("aps", v)} />
-            <RangeRow label="Critical Chance" value={f.critChance} onChange={(v) => setRange("critChance", v)} />
-            <RangeRow label="Damage per Second" value={f.dps} onChange={(v) => setRange("dps", v)} />
-            <RangeRow label="Physical DPS" value={f.physDps} onChange={(v) => setRange("physDps", v)} />
-            <RangeRow label="Elemental DPS" value={f.elemDps} onChange={(v) => setRange("elemDps", v)} />
+            <RangeRow label="Damage" value={draft.damage} onChange={(v) => setDraftRange("damage", v)} />
+            <RangeRow label="Attacks per Second" value={draft.aps} onChange={(v) => setDraftRange("aps", v)} />
+            <RangeRow label="Critical Chance" value={draft.critChance} onChange={(v) => setDraftRange("critChance", v)} />
+            <RangeRow label="Damage per Second" value={draft.dps} onChange={(v) => setDraftRange("dps", v)} />
+            <RangeRow label="Physical DPS" value={draft.physDps} onChange={(v) => setDraftRange("physDps", v)} />
+            <RangeRow label="Elemental DPS" value={draft.elemDps} onChange={(v) => setDraftRange("elemDps", v)} />
           </TwoCol>
         </CollapsibleSection>
 
         {/* Armour Filters */}
         <CollapsibleSection title="Armour Filters">
           <TwoCol>
-            <RangeRow label="Armour" value={f.armour} onChange={(v) => setRange("armour", v)} />
-            <RangeRow label="Evasion" value={f.evasion} onChange={(v) => setRange("evasion", v)} />
-            <RangeRow label="Energy Shield" value={f.energyShield} onChange={(v) => setRange("energyShield", v)} />
-            <RangeRow label="Ward" value={f.ward} onChange={(v) => setRange("ward", v)} />
-            <RangeRow label="Block" value={f.block} onChange={(v) => setRange("block", v)} />
-            <RangeRow label="Base Percentile" value={f.basePercentile} onChange={(v) => setRange("basePercentile", v)} />
+            <RangeRow label="Armour" value={draft.armour} onChange={(v) => setDraftRange("armour", v)} />
+            <RangeRow label="Evasion" value={draft.evasion} onChange={(v) => setDraftRange("evasion", v)} />
+            <RangeRow label="Energy Shield" value={draft.energyShield} onChange={(v) => setDraftRange("energyShield", v)} />
+            <RangeRow label="Ward" value={draft.ward} onChange={(v) => setDraftRange("ward", v)} />
+            <RangeRow label="Block" value={draft.block} onChange={(v) => setDraftRange("block", v)} />
+            <RangeRow label="Base Percentile" value={draft.basePercentile} onChange={(v) => setDraftRange("basePercentile", v)} />
           </TwoCol>
         </CollapsibleSection>
 
         {/* Socket Filters */}
         <CollapsibleSection title="Socket Filters">
-          <RangeRow label="Sockets" value={f.sockets} onChange={(v) => setRange("sockets", v)} />
-          <RangeRow label="Linked Sockets" value={f.links} onChange={(v) => setRange("links", v)} />
+          <RangeRow label="Sockets" value={draft.sockets} onChange={(v) => setDraftRange("sockets", v)} />
+          <RangeRow label="Linked Sockets" value={draft.links} onChange={(v) => setDraftRange("links", v)} />
         </CollapsibleSection>
 
         {/* Requirements */}
         <CollapsibleSection title="Requirements">
           <TwoCol>
-            <RangeRow label="Level" value={f.reqLevel} onChange={(v) => setRange("reqLevel", v)} />
-            <RangeRow label="Strength" value={f.reqStr} onChange={(v) => setRange("reqStr", v)} />
-            <RangeRow label="Dexterity" value={f.reqDex} onChange={(v) => setRange("reqDex", v)} />
-            <RangeRow label="Intelligence" value={f.reqInt} onChange={(v) => setRange("reqInt", v)} />
+            <RangeRow label="Level" value={draft.reqLevel} onChange={(v) => setDraftRange("reqLevel", v)} />
+            <RangeRow label="Strength" value={draft.reqStr} onChange={(v) => setDraftRange("reqStr", v)} />
+            <RangeRow label="Dexterity" value={draft.reqDex} onChange={(v) => setDraftRange("reqDex", v)} />
+            <RangeRow label="Intelligence" value={draft.reqInt} onChange={(v) => setDraftRange("reqInt", v)} />
           </TwoCol>
-          <SelectRow label="Character Class" value={f.charClass}
-            options={CHAR_CLASSES} onChange={(v) => setField("charClass", v)} />
+          <SelectRow label="Character Class" value={draft.charClass} options={CHAR_CLASSES}
+            onChange={(v) => setDraftField("charClass", v)} />
         </CollapsibleSection>
 
         {/* Miscellaneous */}
         <CollapsibleSection title="Miscellaneous">
           <TwoCol>
-            <RangeRow label="Quality" value={f.quality} onChange={(v) => setRange("quality", v)} />
-            <RangeRow label="Item Level" value={f.itemLevel} onChange={(v) => setRange("itemLevel", v)} />
-            <RangeRow label="Gem Level" value={f.gemLevel} onChange={(v) => setRange("gemLevel", v)} />
+            <RangeRow label="Quality" value={draft.quality} onChange={(v) => setDraftRange("quality", v)} />
+            <RangeRow label="Item Level" value={draft.itemLevel} onChange={(v) => setDraftRange("itemLevel", v)} />
+            <RangeRow label="Gem Level" value={draft.gemLevel} onChange={(v) => setDraftRange("gemLevel", v)} />
           </TwoCol>
           <TwoCol>
-            <SelectRow label="Identified" value={f.identified} options={TRI_OPTIONS} onChange={(v) => setField("identified", v)} />
-            <SelectRow label="Corrupted" value={f.corrupted} options={TRI_OPTIONS} onChange={(v) => setField("corrupted", v)} />
-            <SelectRow label="Mirrored" value={f.mirrored} options={TRI_OPTIONS} onChange={(v) => setField("mirrored", v)} />
-            <SelectRow label="Split" value={f.split} options={TRI_OPTIONS} onChange={(v) => setField("split", v)} />
-            <SelectRow label="Fractured" value={f.fractured} options={TRI_OPTIONS} onChange={(v) => setField("fractured", v)} />
-            <SelectRow label="Synthesised" value={f.synthesised} options={TRI_OPTIONS} onChange={(v) => setField("synthesised", v)} />
+            <SelectRow label="Identified" value={draft.identified} options={TRI_OPTIONS} onChange={(v) => setDraftField("identified", v)} />
+            <SelectRow label="Corrupted" value={draft.corrupted} options={TRI_OPTIONS} onChange={(v) => setDraftField("corrupted", v)} />
+            <SelectRow label="Mirrored" value={draft.mirrored} options={TRI_OPTIONS} onChange={(v) => setDraftField("mirrored", v)} />
+            <SelectRow label="Split" value={draft.split} options={TRI_OPTIONS} onChange={(v) => setDraftField("split", v)} />
+            <SelectRow label="Fractured" value={draft.fractured} options={TRI_OPTIONS} onChange={(v) => setDraftField("fractured", v)} />
+            <SelectRow label="Synthesised" value={draft.synthesised} options={TRI_OPTIONS} onChange={(v) => setDraftField("synthesised", v)} />
           </TwoCol>
         </CollapsibleSection>
 
         {/* Trade Filters */}
         <CollapsibleSection title="Trade Filters" defaultOpen>
           <div style={{ marginBottom: 6 }}>
-            <label style={S.label}>Seller Account</label>
-            <input style={S.input} type="text" placeholder="Enter account name…"
-              value={f.sellerAccount}
-              onChange={(e) => setField("sellerAccount", e.target.value)} />
+            <label style={T.label}>Seller Account</label>
+            <input style={T.input} type="text" placeholder="Enter account name…"
+              value={draft.sellerAccount}
+              onChange={(e) => setDraftField("sellerAccount", e.target.value)}
+              onKeyDown={handleKeyDown} />
           </div>
-          <SelectRow label="Sale Type" value={f.saleType} options={SALE_TYPES}
-            onChange={(v) => setField("saleType", v)} />
+          <SelectRow label="Sale Type" value={draft.saleType} options={SALE_TYPES}
+            onChange={(v) => setDraftField("saleType", v)} />
           <div style={{ marginBottom: 6 }}>
-            <label style={S.label}>Buyout Price</label>
+            <label style={T.label}>Buyout Price</label>
             <div style={{ display: "flex", gap: 4 }}>
-              <input style={S.input} type="number" placeholder="min" value={f.minPrice}
-                onChange={(e) => setField("minPrice", e.target.value)} />
-              <input style={S.input} type="number" placeholder="max" value={f.maxPrice}
-                onChange={(e) => setField("maxPrice", e.target.value)} />
+              <input style={T.input} type="number" placeholder="min" value={draft.minPrice}
+                onChange={(e) => setDraftField("minPrice", e.target.value)} />
+              <input style={T.input} type="number" placeholder="max" value={draft.maxPrice}
+                onChange={(e) => setDraftField("maxPrice", e.target.value)} />
             </div>
-            <select style={{ ...S.select, marginTop: 4 }} value={f.priceCurrency}
-              onChange={(e) => setField("priceCurrency", e.target.value)}>
+            <select style={{ ...T.select, marginTop: 4 }} value={draft.priceCurrency}
+              onChange={(e) => setDraftField("priceCurrency", e.target.value)}>
               {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </CollapsibleSection>
+
+        {/* ── Search / Clear buttons ── */}
+        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+          <button onClick={handleSearch} style={{
+            flex: 1,
+            background: "linear-gradient(180deg, #5a3a10 0%, #3a2008 100%)",
+            border: "1px solid #8a6020",
+            borderRadius: 3,
+            color: "#f0c060",
+            fontSize: 12,
+            fontWeight: 700,
+            fontFamily: "'Georgia', serif",
+            letterSpacing: "0.06em",
+            padding: "7px 0",
+            cursor: "pointer",
+          }}>
+            Search
+          </button>
+          <button onClick={handleClear} style={{
+            flex: 1,
+            background: "none",
+            border: "1px solid #2e2410",
+            borderRadius: 3,
+            color: "#7f6a3e",
+            fontSize: 12,
+            fontFamily: "sans-serif",
+            padding: "7px 0",
+            cursor: "pointer",
+          }}>
+            Clear
+          </button>
+        </div>
       </aside>
 
-      {/* ── Right: results ── */}
+      {/* ── Right: results pane ── */}
       <main>
-        {/* Search bar + sort */}
-        <div style={{ marginBottom: 10 }}>
-          <input
-            style={{
-              ...S.input, fontSize: 13, padding: "7px 10px",
-              marginBottom: 8, borderColor: "#3e3418",
-            }}
-            type="text"
-            placeholder="Search Items…"
-            value={f.query}
-            onChange={(e) => setField("query", e.target.value)}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ fontSize: 11, color: "#444", marginRight: 4 }}>
-              {filtered.length} results — Sort:
-            </span>
-            {(["name", "price", "ilvl"] as SortKey[]).map((key) => (
-              <button key={key} onClick={() => toggleSort(key)} style={{
-                background: "none",
-                border: `1px solid ${sortKey === key ? "#8a6a20" : "#2a2a2a"}`,
-                borderRadius: 3,
-                color: sortKey === key ? "#c8a84b" : "#555",
-                fontSize: 11,
-                padding: "2px 8px",
-                cursor: "pointer",
-                fontFamily: "sans-serif",
-              }}>
-                {key}{sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
-              </button>
-            ))}
-          </div>
+        {/* Search bar */}
+        <input
+          style={{
+            ...T.input, fontSize: 13, padding: "7px 10px",
+            marginBottom: 8, borderColor: "#3e3418",
+          }}
+          type="text"
+          placeholder="Search Items…"
+          value={draft.query}
+          onChange={(e) => setDraftField("query", e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+
+        {/* Sort + result count */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#444", marginRight: 4 }}>
+            {filtered.length} results — Sort:
+          </span>
+          {(["name", "price", "ilvl"] as SortKey[]).map((key) => (
+            <button key={key} onClick={() => toggleSort(key)} style={{
+              background: "none",
+              border: `1px solid ${sortKey === key ? "#8a6a20" : "#2a2a2a"}`,
+              borderRadius: 3,
+              color: sortKey === key ? "#c8a84b" : "#555",
+              fontSize: 11,
+              padding: "2px 8px",
+              cursor: "pointer",
+              fontFamily: "sans-serif",
+            }}>
+              {key}{sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+            </button>
+          ))}
         </div>
 
-        {/* Results list */}
+        {/* Results */}
         {pageItems.length === 0 ? (
           <p style={{ color: "#444", fontSize: 13 }}>No items match your filters.</p>
         ) : (
