@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getProfile, getPublicStashTabs } from "@/lib/poe-api";
 import StashButton from "./StashButton";
+import ItemSearch from "./ItemSearch";
 
 const LEAGUE = "Mirage"; // hard-coded as mirage league for now
 
@@ -13,7 +14,7 @@ export default async function Dashboard() {
 
   const [profile, stashData] = await Promise.all([
     getProfile(),
-    getPublicStashTabs(), // no nextChangeId = latest snapshot
+    getPublicStashTabs(),
   ]);
 
   const leagueItems = stashData.stashes
@@ -24,52 +25,17 @@ export default async function Dashboard() {
         accountName: s.accountName,
         stashName: s.stash,
       }))
-    )
-    .slice(0, 20);
+    );
 
   return (
-    <main style={{ fontFamily: "sans-serif", maxWidth: 640, margin: "80px auto", padding: "0 1rem" }}>
+    <main style={{ fontFamily: "sans-serif", maxWidth: 760, margin: "80px auto", padding: "0 1rem" }}>
       <h1>Welcome, {profile.name}!</h1>
 
       <StashButton league={LEAGUE} />
 
-      <section style={{ marginTop: 32 }}>
-        <h2 style={{ fontSize: 16, marginBottom: 4 }}>Recently Listed — {LEAGUE}</h2>
-        <p style={{ fontSize: 12, color: "#999", marginBottom: 12 }}>
-          Next change ID: {stashData.next_change_id}
-        </p>
-        {leagueItems.length === 0 ? (
-          <p style={{ color: "#666", fontSize: 14 }}>No public items found for this league in the latest snapshot.</p>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
-            {leagueItems.map((item, i) => (
-              <li
-                key={i}
-                style={{
-                  background: "#c7c7c7",
-                  border: "1px solid #333",
-                  borderRadius: 6,
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <div>
-                  <strong>{item.name || item.typeLine}</strong>
-                  {item.note && (
-                    <span style={{ color: "#aaa", marginLeft: 8 }}>{item.note}</span>
-                  )}
-                </div>
-                <span style={{ color: "#666", fontSize: 12 }}>{item.accountName}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <ItemSearch items={leagueItems} league={LEAGUE} />
 
-      <p style={{ fontSize: 13, color: "#999", marginTop: 32 }}>
+      <p style={{ fontSize: 13, color: "#444", marginTop: 40 }}>
         This product isn&apos;t affiliated with or endorsed by Grinding Gear Games in any way.
       </p>
     </main>
