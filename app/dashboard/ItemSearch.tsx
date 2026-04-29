@@ -28,13 +28,30 @@ export type StashItem = {
   gemLevel?: number;
   accountName?: string;
   stashName?: string;
-  w?: number; // item width in cells (1 or 2)
-  h?: number; // item height in cells
+  w?: number;
+  h?: number;
 };
 
 type ParsedPrice = { amount: number; currency: string } | null;
 type SortKey = "name" | "price" | "ilvl";
 type SortDir = "asc" | "desc";
+
+// ── Socket filter types ───────────────────────────────────────────────────────
+
+type SocketColor = "R" | "G" | "B" | "W";
+
+/**
+ * For both Sockets and Link Groups:
+ *   colors: which colours must be present (each toggled colour requires ≥1 of that colour)
+ *   min/max: total count range
+ */
+type SocketFilter = {
+  colors: Set<SocketColor>;
+  min: string;
+  max: string;
+};
+
+const emptySocketFilter = (): SocketFilter => ({ colors: new Set(), min: "", max: "" });
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 
@@ -49,7 +66,8 @@ type Filters = {
   dps: RangeFilter; physDps: RangeFilter; elemDps: RangeFilter;
   armour: RangeFilter; evasion: RangeFilter; energyShield: RangeFilter;
   ward: RangeFilter; block: RangeFilter; basePercentile: RangeFilter;
-  sockets: RangeFilter; links: RangeFilter;
+  sockets: SocketFilter;
+  links: SocketFilter;
   reqLevel: RangeFilter; reqStr: RangeFilter; reqDex: RangeFilter; reqInt: RangeFilter;
   charClass: string;
   quality: RangeFilter; itemLevel: RangeFilter; gemLevel: RangeFilter;
@@ -66,7 +84,8 @@ function defaultFilters(): Filters {
     dps: emptyRange(), physDps: emptyRange(), elemDps: emptyRange(),
     armour: emptyRange(), evasion: emptyRange(), energyShield: emptyRange(),
     ward: emptyRange(), block: emptyRange(), basePercentile: emptyRange(),
-    sockets: emptyRange(), links: emptyRange(),
+    sockets: emptySocketFilter(),
+    links: emptySocketFilter(),
     reqLevel: emptyRange(), reqStr: emptyRange(), reqDex: emptyRange(), reqInt: emptyRange(),
     charClass: "Any",
     quality: emptyRange(), itemLevel: emptyRange(), gemLevel: emptyRange(),
@@ -108,21 +127,27 @@ function rarityStyle(item: StashItem) {
   return RARITY_COLORS[frameLabel(item)] ?? RARITY_COLORS["Normal"];
 }
 
-// Socket colour → fill colour matching PoE's actual socket colours
-const SOCKET_COLORS: Record<string, { fill: string; rim: string }> = {
-  R: { fill: "#8b0000", rim: "#e04040" }, // Strength – red
-  G: { fill: "#005000", rim: "#40b840" }, // Dexterity – green
-  B: { fill: "#00008b", rim: "#4080e0" }, // Intelligence – blue
-  W: { fill: "#666",    rim: "#ddd"    }, // White
-  A: { fill: "#333",    rim: "#888"    }, // Abyss
-  D: { fill: "#222",    rim: "#999"    }, // Delve / resonator
+const SOCKET_DISPLAY: Record<SocketColor, { label: string; active: string; dim: string }> = {
+  R: { label: "R", active: "#c84040", dim: "#5a2020" },
+  G: { label: "G", active: "#40b840", dim: "#1a5a1a" },
+  B: { label: "B", active: "#4080e0", dim: "#1a3070" },
+  W: { label: "W", active: "#cccccc", dim: "#555555" },
 };
-function socketColor(sColour: string) {
-  return SOCKET_COLORS[sColour?.toUpperCase()] ?? SOCKET_COLORS["W"];
+
+const SOCKET_ICON_COLORS: Record<string, { fill: string; rim: string }> = {
+  R: { fill: "#8b0000", rim: "#e04040" },
+  G: { fill: "#005000", rim: "#40b840" },
+  B: { fill: "#00008b", rim: "#4080e0" },
+  W: { fill: "#666",    rim: "#ddd"    },
+  A: { fill: "#333",    rim: "#888"    },
+  D: { fill: "#222",    rim: "#999"    },
+};
+function socketIconColor(sColour: string) {
+  return SOCKET_ICON_COLORS[sColour?.toUpperCase()] ?? SOCKET_ICON_COLORS["W"];
 }
 
 const CURRENCY_PRIORITY: Record<string, number> = {
-  divine: 200, exalted: 1, chaos: 1, vaal: 1, regal: 3,
+  divine: 200, exalted: 80, chaos: 1, vaal: 1, regal: 3,
   fusing: 0.5, alch: 0.2, alt: 0.05, chrome: 0.1, scour: 0.5, jewellers: 0.15,
 };
 function chaosValue(price: ParsedPrice): number {
@@ -141,19 +166,76 @@ function inRange(val: number | null, range: RangeFilter): boolean {
   if (range.max !== "" && val > parseFloat(range.max)) return false;
   return true;
 }
-function anyActive(r: RangeFilter) { return r.min !== "" || r.max !== ""; }
+function anyRangeActive(r: RangeFilter) { return r.min !== "" || r.max !== ""; }
+function socketFilterActive(sf: SocketFilter) { return sf.colors.size > 0 || sf.min !== "" || sf.max !== ""; }
+
 function triState(val: boolean | undefined, f: string): boolean {
   if (f === "Any") return true;
   if (f === "Yes") return !!val;
   return !val;
 }
 
+/** Count sockets of each colour on an item */
+function countByColor(sockets: StashItem["sockets"]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  sockets?.forEach((s) => {
+    const c = s.sColour?.toUpperCase() ?? "W";
+    counts[c] = (counts[c] ?? 0) + 1;
+  });
+  return counts;
+}
+
+/** Find the largest linked group on an item, and its colour breakdown */
+function largestGroup(sockets: StashItem["sockets"]): { size: number; colors: Record<string, number> } {
+  if (!sockets || sockets.length === 0) return { size: 0, colors: {} };
+  const groups: Record<number, { group: number; attr: string; sColour: string }[]> = {};
+  sockets.forEach((s) => { (groups[s.group] ??= []).push(s); });
+  let best: { size: number; colors: Record<string, number> } = { size: 0, colors: {} };
+  Object.values(groups).forEach((g) => {
+    if (g.length > best.size) {
+      const colors: Record<string, number> = {};
+      g.forEach((s) => { const c = s.sColour?.toUpperCase() ?? "W"; colors[c] = (colors[c] ?? 0) + 1; });
+      best = { size: g.length, colors };
+    }
+  });
+  return best;
+}
+
+function applySocketFilter(
+  item: StashItem,
+  sf: SocketFilter,
+  mode: "total" | "links"
+): boolean {
+  if (!socketFilterActive(sf)) return true;
+
+  let count: number;
+  let colorCounts: Record<string, number>;
+
+  if (mode === "total") {
+    count = item.sockets?.length ?? 0;
+    colorCounts = countByColor(item.sockets);
+  } else {
+    const lg = largestGroup(item.sockets);
+    count = lg.size;
+    colorCounts = lg.colors;
+  }
+
+  // min/max total
+  if (sf.min !== "" && count < parseInt(sf.min)) return false;
+  if (sf.max !== "" && count > parseInt(sf.max)) return false;
+
+  // each toggled colour must have ≥1 socket of that colour
+  for (const c of sf.colors) {
+    if ((colorCounts[c] ?? 0) < 1) return false;
+  }
+
+  return true;
+}
+
 function applyFilters(items: StashItem[], f: Filters): StashItem[] {
   return items.filter((item) => {
     const q = f.query.trim().toLowerCase();
-    if (q) {
-      if (!`${item.name} ${item.typeLine} ${item.baseType ?? ""}`.toLowerCase().includes(q)) return false;
-    }
+    if (q && !`${item.name} ${item.typeLine} ${item.baseType ?? ""}`.toLowerCase().includes(q)) return false;
     if (f.itemRarity !== "Any" && frameLabel(item) !== f.itemRarity) return false;
     if (!triState(item.identified, f.identified)) return false;
     if (!triState(item.corrupted, f.corrupted)) return false;
@@ -161,29 +243,24 @@ function applyFilters(items: StashItem[], f: Filters): StashItem[] {
     if (!triState(item.split, f.split)) return false;
     if (!triState(item.fractured, f.fractured)) return false;
     if (!triState(item.synthesised, f.synthesised)) return false;
-    if (anyActive(f.itemLevel) && !inRange(item.ilvl ?? null, f.itemLevel)) return false;
-    if (anyActive(f.quality) && !inRange(item.quality ?? null, f.quality)) return false;
-    if (anyActive(f.gemLevel) && !inRange(item.gemLevel ?? null, f.gemLevel)) return false;
-    if (anyActive(f.armour) && !inRange(getPropValue(item, "Armour"), f.armour)) return false;
-    if (anyActive(f.evasion) && !inRange(getPropValue(item, "Evasion Rating"), f.evasion)) return false;
-    if (anyActive(f.energyShield) && !inRange(getPropValue(item, "Energy Shield"), f.energyShield)) return false;
-    if (anyActive(f.ward) && !inRange(getPropValue(item, "Ward"), f.ward)) return false;
-    if (anyActive(f.block) && !inRange(getPropValue(item, "Chance to Block"), f.block)) return false;
-    if (anyActive(f.aps) && !inRange(getPropValue(item, "Attacks per Second"), f.aps)) return false;
-    if (anyActive(f.critChance) && !inRange(getPropValue(item, "Critical Strike Chance"), f.critChance)) return false;
+    if (anyRangeActive(f.itemLevel) && !inRange(item.ilvl ?? null, f.itemLevel)) return false;
+    if (anyRangeActive(f.quality) && !inRange(item.quality ?? null, f.quality)) return false;
+    if (anyRangeActive(f.gemLevel) && !inRange(item.gemLevel ?? null, f.gemLevel)) return false;
+    if (anyRangeActive(f.armour) && !inRange(getPropValue(item, "Armour"), f.armour)) return false;
+    if (anyRangeActive(f.evasion) && !inRange(getPropValue(item, "Evasion Rating"), f.evasion)) return false;
+    if (anyRangeActive(f.energyShield) && !inRange(getPropValue(item, "Energy Shield"), f.energyShield)) return false;
+    if (anyRangeActive(f.ward) && !inRange(getPropValue(item, "Ward"), f.ward)) return false;
+    if (anyRangeActive(f.block) && !inRange(getPropValue(item, "Chance to Block"), f.block)) return false;
+    if (anyRangeActive(f.aps) && !inRange(getPropValue(item, "Attacks per Second"), f.aps)) return false;
+    if (anyRangeActive(f.critChance) && !inRange(getPropValue(item, "Critical Strike Chance"), f.critChance)) return false;
     const reqMap: Record<string, number> = {};
     item.requirements?.forEach((r) => { reqMap[r.name] = r.value; });
-    if (anyActive(f.reqLevel) && !inRange(reqMap["Level"] ?? null, f.reqLevel)) return false;
-    if (anyActive(f.reqStr) && !inRange(reqMap["Str"] ?? null, f.reqStr)) return false;
-    if (anyActive(f.reqDex) && !inRange(reqMap["Dex"] ?? null, f.reqDex)) return false;
-    if (anyActive(f.reqInt) && !inRange(reqMap["Int"] ?? null, f.reqInt)) return false;
-    if (anyActive(f.sockets) && !inRange(item.sockets?.length ?? 0, f.sockets)) return false;
-    if (anyActive(f.links)) {
-      const groups: Record<number, number> = {};
-      item.sockets?.forEach((s) => { groups[s.group] = (groups[s.group] ?? 0) + 1; });
-      const maxLink = Math.max(0, ...Object.values(groups));
-      if (!inRange(maxLink, f.links)) return false;
-    }
+    if (anyRangeActive(f.reqLevel) && !inRange(reqMap["Level"] ?? null, f.reqLevel)) return false;
+    if (anyRangeActive(f.reqStr) && !inRange(reqMap["Str"] ?? null, f.reqStr)) return false;
+    if (anyRangeActive(f.reqDex) && !inRange(reqMap["Dex"] ?? null, f.reqDex)) return false;
+    if (anyRangeActive(f.reqInt) && !inRange(reqMap["Int"] ?? null, f.reqInt)) return false;
+    if (!applySocketFilter(item, f.sockets, "total")) return false;
+    if (!applySocketFilter(item, f.links, "links")) return false;
     if (f.sellerAccount.trim() && !item.accountName?.toLowerCase().includes(f.sellerAccount.trim().toLowerCase())) return false;
     if (f.minPrice !== "" || f.maxPrice !== "") {
       const price = parsePrice(item.note);
@@ -203,6 +280,7 @@ const CHAR_CLASSES    = ["Any","Marauder","Ranger","Witch","Duelist","Templar","
 const SALE_TYPES      = ["Any","Buyout or Fixed Price","Negotiable"];
 const CURRENCIES      = ["chaos","divine","exalted","regal","vaal","alch","fusing","alt","chrome","scour","jewellers"];
 const TRI_OPTIONS     = ["Any","Yes","No"];
+const SOCKET_COLORS: SocketColor[] = ["R", "G", "B", "W"];
 
 // ── Shared style tokens ───────────────────────────────────────────────────────
 
@@ -229,22 +307,86 @@ const T = {
   } as React.CSSProperties,
 };
 
-// ── Socket Overlay ────────────────────────────────────────────────────────────
+// ── Socket Filter Row ─────────────────────────────────────────────────────────
 
-/**
- * PoE lays out sockets in a 2-column grid top-to-bottom, snaking:
- *   1-wide items: single column  [0]
- *   2-wide items: two columns    [0,1] [2,3] [4,5]  (left col down, right col down)
- *
- * The canonical layout for a 2-wide item (body armour) with up to 6 sockets:
- *   row0: s0 s1
- *   row1: s3 s2   ← snakes right-to-left on even rows
- *   row2: s4 s5
- *
- * Links connect sockets in the same group.
- */
+function SocketFilterRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: SocketFilter;
+  onChange: (v: SocketFilter) => void;
+}) {
+  function toggleColor(c: SocketColor) {
+    const next = new Set(value.colors);
+    if (next.has(c)) next.delete(c); else next.add(c);
+    onChange({ ...value, colors: next });
+  }
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <label style={T.label}>{label}</label>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {/* Colour toggles */}
+        {SOCKET_COLORS.map((c) => {
+          const active = value.colors.has(c);
+          const style = SOCKET_DISPLAY[c];
+          return (
+            <button
+              key={c}
+              onClick={() => toggleColor(c)}
+              title={`Require ${c === "R" ? "Red" : c === "G" ? "Green" : c === "B" ? "Blue" : "White"} socket`}
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 3,
+                border: `1px solid ${active ? style.active : "#2e2410"}`,
+                background: active ? `${style.active}22` : "#0a0a0a",
+                color: active ? style.active : style.dim,
+                fontSize: 11,
+                fontWeight: 700,
+                fontFamily: "sans-serif",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                transition: "all 0.12s",
+              }}
+            >
+              {c}
+            </button>
+          );
+        })}
+
+        {/* Min / Max count */}
+        <input
+          style={{ ...T.input, width: 44, flex: "none", textAlign: "center" }}
+          type="number"
+          min={0}
+          max={6}
+          placeholder="min"
+          value={value.min}
+          onChange={(e) => onChange({ ...value, min: e.target.value })}
+        />
+        <input
+          style={{ ...T.input, width: 44, flex: "none", textAlign: "center" }}
+          type="number"
+          min={0}
+          max={6}
+          placeholder="max"
+          value={value.max}
+          onChange={(e) => onChange({ ...value, max: e.target.value })}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Socket Overlay (on item icon) ─────────────────────────────────────────────
+
 function getSocketPositions(count: number, cols: number): { x: number; y: number }[] {
-  // snake layout: goes down-right then down-left alternating
   const positions: { x: number; y: number }[] = [];
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / cols);
@@ -254,13 +396,12 @@ function getSocketPositions(count: number, cols: number): { x: number; y: number
   return positions;
 }
 
-function SocketOverlay({ sockets, itemW, itemH }: {
+function SocketOverlay({ sockets, itemW }: {
   sockets: NonNullable<StashItem["sockets"]>;
   itemW: number;
-  itemH: number;
 }) {
-  const cols = Math.min(itemW, 2); // body = 2 cols, 1-wide = 1 col
-  const CELL = 18;  // px per grid cell
+  const cols = Math.min(itemW, 2);
+  const CELL = 18;
   const SOCKET_R = 7;
   const LINK_W = 3;
   const PAD = 2;
@@ -269,28 +410,20 @@ function SocketOverlay({ sockets, itemW, itemH }: {
   const svgW = cols * CELL + PAD * 2;
   const svgH = Math.max(1, Math.ceil(sockets.length / cols)) * CELL + PAD * 2;
 
-  // Build link segments between consecutive sockets in same group
   const links: { x1: number; y1: number; x2: number; y2: number }[] = [];
   for (let i = 0; i < sockets.length - 1; i++) {
     if (sockets[i].group === sockets[i + 1].group) {
-      const a = positions[i];
-      const b = positions[i + 1];
+      const a = positions[i], b = positions[i + 1];
       links.push({
-        x1: PAD + a.x * CELL + CELL / 2,
-        y1: PAD + a.y * CELL + CELL / 2,
-        x2: PAD + b.x * CELL + CELL / 2,
-        y2: PAD + b.y * CELL + CELL / 2,
+        x1: PAD + a.x * CELL + CELL / 2, y1: PAD + a.y * CELL + CELL / 2,
+        x2: PAD + b.x * CELL + CELL / 2, y2: PAD + b.y * CELL + CELL / 2,
       });
     }
   }
 
   return (
-    <svg
-      width={svgW}
-      height={svgH}
-      style={{ position: "absolute", bottom: PAD, left: "50%", transform: "translateX(-50%)" }}
-    >
-      {/* Link lines drawn first so sockets sit on top */}
+    <svg width={svgW} height={svgH}
+      style={{ position: "absolute", bottom: PAD, left: "50%", transform: "translateX(-50%)" }}>
       {links.map((l, i) => (
         <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
           stroke="#c8a84b" strokeWidth={LINK_W} strokeLinecap="round" />
@@ -299,14 +432,11 @@ function SocketOverlay({ sockets, itemW, itemH }: {
         const pos = positions[i];
         const cx = PAD + pos.x * CELL + CELL / 2;
         const cy = PAD + pos.y * CELL + CELL / 2;
-        const sc = socketColor(s.sColour);
+        const sc = socketIconColor(s.sColour);
         return (
           <g key={i}>
-            {/* Outer rim */}
             <circle cx={cx} cy={cy} r={SOCKET_R} fill={sc.rim} />
-            {/* Inner fill */}
             <circle cx={cx} cy={cy} r={SOCKET_R - 2.5} fill={sc.fill} />
-            {/* Subtle highlight */}
             <circle cx={cx - 1.5} cy={cy - 2} r={1.5} fill="rgba(255,255,255,0.25)" />
           </g>
         );
@@ -324,8 +454,6 @@ function ItemCard({ item }: { item: StashItem }) {
   const displayName = item.name && item.name !== item.typeLine ? item.name : null;
   const displayType = item.typeLine || item.name;
   const allMods = [...(item.implicitMods ?? []), ...(item.explicitMods ?? [])];
-
-  // Icon dimensions — PoE uses 47px per cell
   const CELL_PX = 47;
   const itemW = item.w ?? 2;
   const itemH = item.h ?? 4;
@@ -341,68 +469,42 @@ function ItemCard({ item }: { item: StashItem }) {
       fontFamily: "'Georgia', serif",
       display: "flex",
     }}>
-
-      {/* ── Left: icon + socket overlay ── */}
       {item.icon && (
         <div style={{
-          position: "relative",
-          width: iconW,
-          minWidth: iconW,
-          background: "rgba(0,0,0,0.55)",
-          borderRight: `1px solid ${rarity.border}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "8px 4px",
+          position: "relative", width: iconW, minWidth: iconW,
+          background: "rgba(0,0,0,0.55)", borderRight: `1px solid ${rarity.border}`,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "8px 4px",
         }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={item.icon}
-            alt={displayName ?? displayType}
-            width={iconW - 8}
-            height={iconH}
-            style={{ objectFit: "contain", display: "block", imageRendering: "pixelated" }}
-          />
+          <img src={item.icon} alt={displayName ?? displayType}
+            width={iconW - 8} height={iconH}
+            style={{ objectFit: "contain", display: "block", imageRendering: "pixelated" }} />
           {item.sockets && item.sockets.length > 0 && (
-            <SocketOverlay sockets={item.sockets} itemW={itemW} itemH={itemH} />
+            <SocketOverlay sockets={item.sockets} itemW={itemW} />
           )}
         </div>
       )}
 
-      {/* ── Right: header + stats + price ── */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        {/* Header */}
         <div style={{
           borderBottom: `1px solid ${rarity.border}`,
-          padding: "7px 12px 6px",
-          textAlign: "center",
-          background: "rgba(0,0,0,0.35)",
+          padding: "7px 12px 6px", textAlign: "center", background: "rgba(0,0,0,0.35)",
         }}>
           {displayName ? (
             <>
-              <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
-                {displayName}
-              </div>
-              <div style={{ color: rarity.base, fontSize: 12, opacity: 0.8, marginTop: 1, letterSpacing: "0.03em" }}>
-                {displayType}
-              </div>
+              <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>{displayName}</div>
+              <div style={{ color: rarity.base, fontSize: 12, opacity: 0.8, marginTop: 1, letterSpacing: "0.03em" }}>{displayType}</div>
             </>
           ) : (
-            <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>
-              {displayType}
-            </div>
+            <div style={{ color: rarity.name, fontSize: 14, fontWeight: 700, letterSpacing: "0.05em" }}>{displayType}</div>
           )}
         </div>
 
-        {/* Body */}
         <div style={{ padding: "7px 12px", display: "flex", gap: 12, alignItems: "flex-start", flex: 1 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            {/* Properties row */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginBottom: allMods.length ? 5 : 0 }}>
               {item.ilvl !== undefined && (
-                <span style={{ fontSize: 11, color: "#7f7f7f" }}>
-                  Item Level: <span style={{ color: "#c8c8c8" }}>{item.ilvl}</span>
-                </span>
+                <span style={{ fontSize: 11, color: "#7f7f7f" }}>Item Level: <span style={{ color: "#c8c8c8" }}>{item.ilvl}</span></span>
               )}
               <span style={{ fontSize: 11, color: "#7f7f7f" }}>{label}</span>
               {item.corrupted   && <span style={{ fontSize: 11, color: "#d20000" }}>Corrupted</span>}
@@ -410,8 +512,6 @@ function ItemCard({ item }: { item: StashItem }) {
               {item.fractured   && <span style={{ fontSize: 11, color: "#a29160" }}>Fractured</span>}
               {item.synthesised && <span style={{ fontSize: 11, color: "#c98fff" }}>Synthesised</span>}
             </div>
-
-            {/* Mods */}
             {allMods.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {item.implicitMods?.map((mod, i) => (
@@ -426,28 +526,19 @@ function ItemCard({ item }: { item: StashItem }) {
             )}
           </div>
 
-          {/* Price + seller */}
           <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, minWidth: 72 }}>
             {price ? (
-              <div style={{
-                background: "rgba(0,0,0,0.5)", border: "1px solid #4a4432",
-                borderRadius: 3, padding: "4px 10px", textAlign: "center", lineHeight: 1.3,
-              }}>
+              <div style={{ background: "rgba(0,0,0,0.5)", border: "1px solid #4a4432", borderRadius: 3, padding: "4px 10px", textAlign: "center", lineHeight: 1.3 }}>
                 <div style={{ fontSize: 13, color: "#c8c8c8", fontWeight: 700, fontFamily: "sans-serif" }}>
                   {price.amount % 1 === 0 ? price.amount : price.amount.toFixed(1)}
                 </div>
-                <div style={{ fontSize: 10, color: "#aa9e82", letterSpacing: "0.04em", fontFamily: "sans-serif" }}>
-                  {price.currency}
-                </div>
+                <div style={{ fontSize: 10, color: "#aa9e82", letterSpacing: "0.04em", fontFamily: "sans-serif" }}>{price.currency}</div>
               </div>
             ) : (
               <div style={{ fontSize: 10, color: "#333", fontStyle: "italic", fontFamily: "sans-serif" }}>no price</div>
             )}
             {item.accountName && (
-              <div style={{
-                fontSize: 10, color: "#555", textAlign: "right", maxWidth: 110,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "sans-serif",
-              }}>
+              <div style={{ fontSize: 10, color: "#555", textAlign: "right", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "sans-serif" }}>
                 {item.accountName}
               </div>
             )}
@@ -458,7 +549,7 @@ function ItemCard({ item }: { item: StashItem }) {
   );
 }
 
-// ── Sidebar components ────────────────────────────────────────────────────────
+// ── Sidebar helpers ───────────────────────────────────────────────────────────
 
 function RangeRow({ label, value, onChange }: { label: string; value: RangeFilter; onChange: (v: RangeFilter) => void }) {
   return (
@@ -521,6 +612,10 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
   function setDraftRange(key: keyof Filters, val: RangeFilter) {
     setDraft((prev) => ({ ...prev, [key]: val }));
   }
+  function setDraftSocket(key: "sockets" | "links", val: SocketFilter) {
+    setDraft((prev) => ({ ...prev, [key]: val }));
+  }
+
   function handleSearch() { setCommitted(draft); setPage(0); }
   function handleClear() { const f = defaultFilters(); setDraft(f); setCommitted(f); setPage(0); }
   function handleKeyDown(e: React.KeyboardEvent) { if (e.key === "Enter") handleSearch(); }
@@ -576,9 +671,12 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
           </TwoCol>
         </CollapsibleSection>
 
-        <CollapsibleSection title="Socket Filters">
-          <RangeRow label="Sockets" value={draft.sockets} onChange={(v) => setDraftRange("sockets", v)} />
-          <RangeRow label="Linked Sockets" value={draft.links} onChange={(v) => setDraftRange("links", v)} />
+        {/* ── Socket Filters ── */}
+        <CollapsibleSection title="Socket Filters" defaultOpen>
+          <SocketFilterRow label="Sockets" value={draft.sockets}
+            onChange={(v) => setDraftSocket("sockets", v)} />
+          <SocketFilterRow label="Link Groups" value={draft.links}
+            onChange={(v) => setDraftSocket("links", v)} />
         </CollapsibleSection>
 
         <CollapsibleSection title="Requirements">
@@ -636,26 +734,15 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
           <button onClick={handleSearch} style={{
             flex: 1,
             background: "linear-gradient(180deg, #5a3a10 0%, #3a2008 100%)",
-            border: "1px solid #8a6020",
-            borderRadius: 3,
-            color: "#f0c060",
-            fontSize: 12,
-            fontWeight: 700,
-            fontFamily: "'Georgia', serif",
-            letterSpacing: "0.06em",
-            padding: "7px 0",
-            cursor: "pointer",
+            border: "1px solid #8a6020", borderRadius: 3,
+            color: "#f0c060", fontSize: 12, fontWeight: 700,
+            fontFamily: "'Georgia', serif", letterSpacing: "0.06em",
+            padding: "7px 0", cursor: "pointer",
           }}>Search</button>
           <button onClick={handleClear} style={{
-            flex: 1,
-            background: "none",
-            border: "1px solid #2e2410",
-            borderRadius: 3,
-            color: "#7f6a3e",
-            fontSize: 12,
-            fontFamily: "sans-serif",
-            padding: "7px 0",
-            cursor: "pointer",
+            flex: 1, background: "none", border: "1px solid #2e2410", borderRadius: 3,
+            color: "#7f6a3e", fontSize: 12, fontFamily: "sans-serif",
+            padding: "7px 0", cursor: "pointer",
           }}>Clear</button>
         </div>
       </aside>
@@ -664,8 +751,7 @@ export default function ItemSearch({ items, league }: { items: StashItem[]; leag
       <main>
         <input
           style={{ ...T.input, fontSize: 13, padding: "7px 10px", marginBottom: 8, borderColor: "#3e3418" }}
-          type="text"
-          placeholder="Search Items…"
+          type="text" placeholder="Search Items…"
           value={draft.query}
           onChange={(e) => setDraftField("query", e.target.value)}
           onKeyDown={handleKeyDown}
