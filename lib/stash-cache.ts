@@ -118,6 +118,9 @@ async function readAllTabs(): Promise<StashTab[]> {
   for (const id of ids) pipeline.get(`${STASH_PREFIX}${id}`);
   const results = await pipeline.exec() as (string | null)[];
 
+  const nullCount = results.filter((r) => r === null).length;
+  console.log("[stash-cache] Tabs fetched:", results.length - nullCount, "nulls:", nullCount);
+
   // Evict IDs whose tab keys have expired from the Set
   const expiredIds = ids.filter((_, i) => results[i] === null);
   if (expiredIds.length > 0) {
