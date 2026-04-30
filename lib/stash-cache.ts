@@ -118,7 +118,7 @@ async function readAllTabs(): Promise<StashTab[]> {
 
   const pipeline = redis.pipeline();
   for (const id of ids) pipeline.get(`${STASH_PREFIX}${id}`);
-  const results = await pipeline.exec() as (string | null)[];
+  const results = await pipeline.exec() as (StashTab | string | null)[];
 
   // Evict IDs whose tab keys have expired from the Set
   const expiredIds = ids.filter((_, i) => results[i] === null);
@@ -129,8 +129,8 @@ async function readAllTabs(): Promise<StashTab[]> {
   }
 
   return results
-    .filter((r): r is string => r !== null)
-    .map((r) => JSON.parse(r) as StashTab);
+    .filter((r): r is StashTab | string => r !== null)
+    .map((r) => (typeof r === "string" ? JSON.parse(r) : r) as StashTab);
 }
 
 /**
