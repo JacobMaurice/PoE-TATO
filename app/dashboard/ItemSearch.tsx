@@ -41,17 +41,20 @@ type SortDir = "asc" | "desc";
 type SocketColor = "R" | "G" | "B" | "W";
 
 /**
- * For both Sockets and Link Groups:
- *   colors: which colours must be present (each toggled colour requires ≥1 of that colour)
- *   min/max: total count range
+ * colorCounts: minimum required sockets of each colour ("" = no requirement)
+ * min/max: total socket/link count range
  */
 type SocketFilter = {
-  colors: Set<SocketColor>;
+  colorCounts: Record<SocketColor, string>;
   min: string;
   max: string;
 };
 
-const emptySocketFilter = (): SocketFilter => ({ colors: new Set(), min: "", max: "" });
+const emptySocketFilter = (): SocketFilter => ({
+  colorCounts: { R: "", G: "", B: "", W: "" },
+  min: "",
+  max: "",
+});
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 
@@ -127,11 +130,12 @@ function rarityStyle(item: StashItem) {
   return RARITY_COLORS[frameLabel(item)] ?? RARITY_COLORS["Normal"];
 }
 
-const SOCKET_DISPLAY: Record<SocketColor, { label: string; active: string; dim: string }> = {
-  R: { label: "R", active: "#c84040", dim: "#5a2020" },
-  G: { label: "G", active: "#40b840", dim: "#1a5a1a" },
-  B: { label: "B", active: "#4080e0", dim: "#1a3070" },
-  W: { label: "W", active: "#cccccc", dim: "#555555" },
+// Per-colour styles for the socket input cells
+const SOCKET_CELL: Record<SocketColor, { label: string; activeColor: string; borderActive: string; bg: string }> = {
+  R: { label: "R", activeColor: "#e04040", borderActive: "#c84040", bg: "#3a0a0a" },
+  G: { label: "G", activeColor: "#40b840", borderActive: "#30a030", bg: "#0a2a0a" },
+  B: { label: "B", activeColor: "#6090e0", borderActive: "#4070c8", bg: "#0a1a3a" },
+  W: { label: "W", activeColor: "#cccccc", borderActive: "#aaaaaa", bg: "#2a2a2a" },
 };
 
 const SOCKET_ICON_COLORS: Record<string, { fill: string; rim: string }> = {
@@ -167,7 +171,11 @@ function inRange(val: number | null, range: RangeFilter): boolean {
   return true;
 }
 function anyRangeActive(r: RangeFilter) { return r.min !== "" || r.max !== ""; }
-function socketFilterActive(sf: SocketFilter) { return sf.colors.size > 0 || sf.min !== "" || sf.max !== ""; }
+
+function socketFilterActive(sf: SocketFilter) {
+  return sf.min !== "" || sf.max !== "" ||
+    Object.values(sf.colorCounts).some((v) => v !== "");
+}
 
 function triState(val: boolean | undefined, f: string): boolean {
   if (f === "Any") return true;
@@ -175,7 +183,7 @@ function triState(val: boolean | undefined, f: string): boolean {
   return !val;
 }
 
-/** Count sockets of each colour on an item */
+/** Count sockets of each colour */
 function countByColor(sockets: StashItem["sockets"]): Record<string, number> {
   const counts: Record<string, number> = {};
   sockets?.forEach((s) => {
@@ -185,12 +193,12 @@ function countByColor(sockets: StashItem["sockets"]): Record<string, number> {
   return counts;
 }
 
-/** Find the largest linked group on an item, and its colour breakdown */
+/** Largest linked group + its colour counts */
 function largestGroup(sockets: StashItem["sockets"]): { size: number; colors: Record<string, number> } {
   if (!sockets || sockets.length === 0) return { size: 0, colors: {} };
-  const groups: Record<number, { group: number; attr: string; sColour: string }[]> = {};
+  const groups: Record<number, typeof sockets> = {};
   sockets.forEach((s) => { (groups[s.group] ??= []).push(s); });
-  let best: { size: number; colors: Record<string, number> } = { size: 0, colors: {} };
+  let best = { size: 0, colors: {} as Record<string, number> };
   Object.values(groups).forEach((g) => {
     if (g.length > best.size) {
       const colors: Record<string, number> = {};
@@ -201,11 +209,7 @@ function largestGroup(sockets: StashItem["sockets"]): { size: number; colors: Re
   return best;
 }
 
-function applySocketFilter(
-  item: StashItem,
-  sf: SocketFilter,
-  mode: "total" | "links"
-): boolean {
+function applySocketFilter(item: StashItem, sf: SocketFilter, mode: "total" | "links"): boolean {
   if (!socketFilterActive(sf)) return true;
 
   let count: number;
@@ -220,13 +224,14 @@ function applySocketFilter(
     colorCounts = lg.colors;
   }
 
-  // min/max total
   if (sf.min !== "" && count < parseInt(sf.min)) return false;
   if (sf.max !== "" && count > parseInt(sf.max)) return false;
 
-  // each toggled colour must have ≥1 socket of that colour
-  for (const c of sf.colors) {
-    if ((colorCounts[c] ?? 0) < 1) return false;
+  // Each colour with a non-empty count must have ≥ that many sockets
+  for (const [c, v] of Object.entries(sf.colorCounts)) {
+    if (v === "") continue;
+    const required = parseInt(v);
+    if ((colorCounts[c] ?? 0) < required) return false;
   }
 
   return true;
@@ -310,72 +315,76 @@ const T = {
 // ── Socket Filter Row ─────────────────────────────────────────────────────────
 
 function SocketFilterRow({
-  label,
-  value,
-  onChange,
+  label, value, onChange,
 }: {
   label: string;
   value: SocketFilter;
   onChange: (v: SocketFilter) => void;
 }) {
-  function toggleColor(c: SocketColor) {
-    const next = new Set(value.colors);
-    if (next.has(c)) next.delete(c); else next.add(c);
-    onChange({ ...value, colors: next });
+  function setColorCount(c: SocketColor, val: string) {
+    // Only allow 0-6
+    const clamped = val === "" ? "" : String(Math.min(6, Math.max(0, parseInt(val) || 0)));
+    onChange({ ...value, colorCounts: { ...value.colorCounts, [c]: clamped } });
   }
 
   return (
     <div style={{ marginBottom: 8 }}>
       <label style={T.label}>{label}</label>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {/* Colour toggles */}
+
+        {/* Per-colour count inputs styled as coloured cells */}
         {SOCKET_COLORS.map((c) => {
-          const active = value.colors.has(c);
-          const style = SOCKET_DISPLAY[c];
+          const style = SOCKET_CELL[c];
+          const val = value.colorCounts[c];
+          const active = val !== "";
           return (
-            <button
-              key={c}
-              onClick={() => toggleColor(c)}
-              title={`Require ${c === "R" ? "Red" : c === "G" ? "Green" : c === "B" ? "Blue" : "White"} socket`}
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: 3,
-                border: `1px solid ${active ? style.active : "#2e2410"}`,
-                background: active ? `${style.active}22` : "#0a0a0a",
-                color: active ? style.active : style.dim,
-                fontSize: 11,
-                fontWeight: 700,
-                fontFamily: "sans-serif",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                transition: "all 0.12s",
-              }}
-            >
-              {c}
-            </button>
+            <div key={c} style={{ position: "relative", flexShrink: 0 }}>
+              <input
+                type="number"
+                min={0}
+                max={6}
+                value={val}
+                placeholder={style.label}
+                onChange={(e) => setColorCount(c, e.target.value)}
+                style={{
+                  width: 28,
+                  height: 26,
+                  textAlign: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  fontFamily: "sans-serif",
+                  borderRadius: 3,
+                  outline: "none",
+                  cursor: "text",
+                  boxSizing: "border-box",
+                  padding: 0,
+                  // Active = show number with colour tint; idle = show letter label dimly
+                  background: active ? style.bg : "#0a0a0a",
+                  border: `1px solid ${active ? style.borderActive : "#2e2410"}`,
+                  color: active ? style.activeColor : "#3a3a3a",
+                  // Hide the browser spinner arrows
+                  MozAppearance: "textfield" as any,
+                }}
+                // Also hide spinner on webkit via inline style trick
+                onFocus={(e) => (e.target.style.color = style.activeColor)}
+                onBlur={(e) => {
+                  e.target.style.color = val !== "" ? style.activeColor : "#3a3a3a";
+                }}
+              />
+            </div>
           );
         })}
 
-        {/* Min / Max count */}
+        {/* Total min / max */}
         <input
           style={{ ...T.input, width: 44, flex: "none", textAlign: "center" }}
-          type="number"
-          min={0}
-          max={6}
-          placeholder="min"
+          type="number" min={0} max={6} placeholder="min"
           value={value.min}
           onChange={(e) => onChange({ ...value, min: e.target.value })}
         />
         <input
           style={{ ...T.input, width: 44, flex: "none", textAlign: "center" }}
-          type="number"
-          min={0}
-          max={6}
-          placeholder="max"
+          type="number" min={0} max={6} placeholder="max"
           value={value.max}
           onChange={(e) => onChange({ ...value, max: e.target.value })}
         />
