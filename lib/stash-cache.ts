@@ -90,7 +90,9 @@ export async function getCachedPublicStashTabs(
           ex: CACHE_TTL,
         });
       }
-      pipeline.sadd(STASH_INDEX_KEY, relevant.map((t) => t.id));
+      for (const tab of relevant) {
+        pipeline.sadd(STASH_INDEX_KEY, tab.id);
+      }
       await pipeline.exec();
     }
 
