@@ -11,8 +11,7 @@ const CRAWLED_AT_KEY  = "poe:stash:crawled_at";
 const LOCK_KEY        = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
-const PAGES_PER_CRAWL = 10;
-const INTER_PAGE_MS   = 1_500;
+const PAGES_PER_CRAWL = 4;
 const CACHE_TTL       = 3_600; // 1 hour — tabs and crawl timestamp expire together
 const LOCK_TTL        = CACHE_TTL;
 
@@ -96,8 +95,6 @@ export async function getCachedPublicStashTabs(
     }
 
     console.log(`[stash-cache] Page ${i + 1}/${PAGES_PER_CRAWL} done, changeId: ${changeId}`);
-
-    if (i < PAGES_PER_CRAWL - 1) await sleep(INTER_PAGE_MS);
   }
 
   if (changeId) await redis.set(CHANGE_ID_KEY, changeId);
@@ -139,7 +136,7 @@ async function readAllTabs(): Promise<StashTab[]> {
 async function waitForStore(
   fetcher: (nextChangeId?: string) => Promise<StashData>,
   league: string,
-  timeoutMs = 30_000,
+  timeoutMs = 10_000,
   intervalMs = 1_000
 ): Promise<StashCache> {
   const deadline = Date.now() + timeoutMs;
