@@ -19,9 +19,6 @@ export default async function Dashboard() {
     getPublicStashTabs(),
   ]);
 
-  console.log("stash tab count:", stashData.stashes.length);
-  console.log("total items:", stashData.stashes.reduce((n, s) => n + (s.items as any[]).length, 0));
-
   const leagueItems = stashData.stashes
     .filter((s) => s.league === LEAGUE && s.public)
     .flatMap((s) =>

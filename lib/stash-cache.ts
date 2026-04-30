@@ -22,7 +22,7 @@ const LOCK_KEY        = "poe:stash:accumulate:lock";
 const PAGES_PER_RUN   = 10;
 const INTER_PAGE_MS   = 1_500; // 1.5 s between requests ≈ 40 req/min max
 const STASH_TAB_TTL   = 60 * 60; // 1 h – tabs evicted if not seen for an hour
-const LOCK_TTL        = 60;       // seconds – prevents overlapping cron runs
+const LOCK_TTL        = 60;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type StashTab = {
@@ -75,7 +75,7 @@ export async function accumulateStashes(
         data = await fetcher(changeId);
       } catch (err) {
         console.error(`[stash-cache] Fetcher error on page ${i}:`, err);
-        break; // Stop this run; next cron tick will resume from stored changeId
+        break;
       }
 
       changeId = data.next_change_id;
@@ -157,6 +157,9 @@ export async function getCachedPublicStashTabs(
     console.warn("[stash-cache] Store empty – falling back to single live fetch");
     const changeId = (await redis.get<string>(CHANGE_ID_KEY)) ?? undefined;
     const data = await fetcher(changeId);
+
+    // Always advance the change ID, even if this page had no Mirage stashes
+    await redis.set(CHANGE_ID_KEY, data.next_change_id);
 
     const relevant = data.stashes.filter(
       (s) => s.league === "Mirage" && s.public
