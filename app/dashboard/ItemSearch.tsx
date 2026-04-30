@@ -151,7 +151,7 @@ function socketIconColor(sColour: string) {
 }
 
 const CURRENCY_PRIORITY: Record<string, number> = {
-  divine: 200, exalted: 80, chaos: 1, vaal: 1, regal: 3,
+  divine: 200, exalted: 1, chaos: 1, vaal: 1, regal: 3,
   fusing: 0.5, alch: 0.2, alt: 0.05, chrome: 0.1, scour: 0.5, jewellers: 0.15,
 };
 function chaosValue(price: ParsedPrice): number {
