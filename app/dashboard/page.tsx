@@ -6,9 +6,16 @@ import { getProfile, getPublicStashTabs, getPublicStashTabsFetcher } from "@/lib
 import { accumulateStashes } from "@/lib/stash-cache";
 import StashButton from "./StashButton";
 import ItemSearch from "./ItemSearch";
-export const dynamic = "force-dynamic"
 
 const LEAGUE = "Mirage"; // hard-coded as mirage league for now
+
+const [profile, stashData] = await Promise.all([
+  getProfile(),
+  getPublicStashTabs(),
+]);
+
+console.log("stash tab count:", stashData.stashes.length);
+console.log("total items:", stashData.stashes.reduce((n, s) => n + (s.items as any[]).length, 0));
 
 export default async function Dashboard() {
   const cookieStore = await cookies();
