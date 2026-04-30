@@ -19,10 +19,10 @@ const LOCK_KEY        = "poe:stash:accumulate:lock";
  * so 10 pages/invocation is safe if you invoke at most once per ~15 s.
  * Tune INTER_PAGE_MS up if you ever receive 429s.
  */
-const PAGES_PER_RUN   = 10;
-const INTER_PAGE_MS   = 1_500; // 1.5 s between requests ≈ 40 req/min max
+const PAGES_PER_RUN   = 4;
+const INTER_PAGE_MS   = 500; // 4 pages × ~1s fetch + 0.5s sleep ≈ 6-7s
 const STASH_TAB_TTL   = 60 * 60; // 1 h – tabs evicted if not seen for an hour
-const LOCK_TTL        = 60;
+const LOCK_TTL        = 10;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type StashTab = {
