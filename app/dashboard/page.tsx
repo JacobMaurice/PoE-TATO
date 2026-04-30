@@ -6,6 +6,7 @@ import { getProfile, getPublicStashTabs, getPublicStashTabsFetcher } from "@/lib
 import { accumulateStashes } from "@/lib/stash-cache";
 import StashButton from "./StashButton";
 import ItemSearch from "./ItemSearch";
+export const dynamic = "force-dynamic"
 
 const LEAGUE = "Mirage"; // hard-coded as mirage league for now
 
