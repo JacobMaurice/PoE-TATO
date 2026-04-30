@@ -155,29 +155,3 @@ export async function getCurrencyExchange(realm?: "xbox" | "sony" | "poe2", next
     }[];
   }>("service:cxapi", `/currency-exchange/${query}`);
 }
-
-/**
- * Returns a stateless fetcher suitable for the background cron accumulator.
- * Uses client credentials (no user session required).
- */
-export function getPublicStashTabsFetcher(realm?: "xbox" | "sony") {
-  return (nextChangeId?: string) => {
-    const params = new URLSearchParams();
-    if (realm) params.set("realm", realm);
-    if (nextChangeId) params.set("id", nextChangeId);
-    const query = params.size ? `?${params}` : "";
- 
-    return poeClientFetch<{
-      next_change_id: string;
-      stashes: {
-        id: string;
-        public: boolean;
-        accountName?: string;
-        stash?: string;
-        stashType: string;
-        league?: string;
-        items: object[];
-      }[];
-    }>("service:psapi", `/public-stash-tabs${query}`);
-  };
-}
