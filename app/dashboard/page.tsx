@@ -1,13 +1,13 @@
 // app/dashboard/page.tsx
-import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getProfile, getPublicStashTabs, getPublicStashTabsFetcher } from "@/lib/poe-api";
-import { accumulateStashes } from "@/lib/stash-cache";
+import { getProfile, getPublicStashTabs } from "@/lib/poe-api";
 import StashButton from "./StashButton";
 import ItemSearch from "./ItemSearch";
 
-const LEAGUE = "Mirage"; // hard-coded as mirage league for now
+export const dynamic = "force-dynamic";
+
+const LEAGUE = "Mirage";
 
 export default async function Dashboard() {
   const cookieStore = await cookies();
@@ -19,22 +19,13 @@ export default async function Dashboard() {
     getPublicStashTabs(),
   ]);
 
-  const leagueItems = stashData.stashes
-    .filter((s) => s.league === LEAGUE && s.public)
-    .flatMap((s) =>
-      (s.items as any[]).map((item) => ({
-        ...item,
-        accountName: s.accountName,
-        stashName: s.stash,
-      }))
-    );
-
-  // After the response is sent, silently walk the next 10 river pages.
-  // The distributed lock in accumulateStashes ensures only one run proceeds
-  // even if multiple users hit the dashboard concurrently.
-  after(async () => {
-    await accumulateStashes(getPublicStashTabsFetcher());
-  });
+  const leagueItems = stashData.stashes.flatMap((s) =>
+    (s.items as any[]).map((item) => ({
+      ...item,
+      accountName: s.accountName,
+      stashName: s.stash,
+    }))
+  );
 
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 760, margin: "80px auto", padding: "0 1rem" }}>

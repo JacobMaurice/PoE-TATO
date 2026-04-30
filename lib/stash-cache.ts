@@ -4,25 +4,14 @@ import { Redis } from "@upstash/redis";
 const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN
 
 // ─── Keys ────────────────────────────────────────────────────────────────────
+const CACHE_KEY       = "poe:stash:cache";         // Full serialized stash array
 const CHANGE_ID_KEY   = "poe:stash:next_change_id";
-const STASH_INDEX_KEY = "poe:stash:index";       // Redis Set of known stash-tab IDs
-const STASH_PREFIX    = "poe:stash:tab:";         // poe:stash:tab:<id> → JSON stash object
-const LOCK_KEY        = "poe:stash:accumulate:lock";
+const LOCK_KEY        = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
-/**
- * How many river pages to walk per invocation of accumulateStashes().
- * Each page is one HTTP request to /public-stash-tabs.
- *
- * The PoE API enforces a "client" rate-limit bucket of roughly
- *   45 requests / 60 s  (observed; always read X-Rate-Limit-* headers)
- * so 10 pages/invocation is safe if you invoke at most once per ~15 s.
- * Tune INTER_PAGE_MS up if you ever receive 429s.
- */
-const PAGES_PER_RUN   = 4;
-const INTER_PAGE_MS   = 500; // 4 pages × ~1s fetch + 0.5s sleep ≈ 6-7s
-const STASH_TAB_TTL   = 60 * 60; // 1 h – tabs evicted if not seen for an hour
-const LOCK_TTL        = 10;
+const PAGES_PER_CRAWL = 6;    // Pages to walk on a cold start
+const INTER_PAGE_MS   = 1_500; // 1.5s between requests — well within PoE rate limits
+const CACHE_TTL       = 3_600; // 1 hour in seconds
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type StashTab = {
@@ -40,163 +29,126 @@ type StashData = {
   stashes: StashTab[];
 };
 
-// ─── Accumulator (called via after() on the request path) ────────────────────
+export type StashCache = {
+  next_change_id: string;
+  stashes: StashTab[];
+  fetchedAt: number;
+};
+
+// ─── Main export ─────────────────────────────────────────────────────────────
 /**
- * Walk PAGES_PER_RUN pages of the public stash river, upserting each Mirage
- * stash tab into Redis individually.  Only one instance runs at a time thanks
- * to a distributed SET NX lock.
+ * Returns cached stash tabs if fresh, otherwise walks PAGES_PER_CRAWL pages
+ * of the public stash river synchronously and caches the result for 1 hour.
  *
- * Intended to be called inside Next.js after() so it runs after the response
- * is flushed — the user sees no added latency.
- *
- * @param fetcher  The same fetcher you already pass in poe-api.ts
- * @param league   League to keep (default "Mirage")
+ * On a cold start the caller will wait ~15s while pages are fetched — this is
+ * intentional. All subsequent requests within the hour are instant.
  */
-export async function accumulateStashes(
+export async function getCachedPublicStashTabs(
   fetcher: (nextChangeId?: string) => Promise<StashData>,
   league = "Mirage"
-): Promise<{ pagesWalked: number; tabsUpserted: number }> {
-  // Distributed lock – bail out if another invocation is still running
-  const locked = await redis.set(LOCK_KEY, "1", { ex: LOCK_TTL, nx: true });
+): Promise<StashCache> {
+  // ── 1. Return cached result if still fresh ──────────────────────────────
+  const cached = await redis.get<StashCache>(CACHE_KEY);
+  if (cached) return cached;
+
+  // ── 2. Acquire a lock so concurrent requests don't all crawl at once ────
+  //    Subsequent requests that arrive during the crawl will spin-wait below.
+  const locked = await redis.set(LOCK_KEY, "1", { ex: CACHE_TTL, nx: true });
+
   if (!locked) {
-    console.log("[stash-cache] Skipping run – lock held by another worker");
-    return { pagesWalked: 0, tabsUpserted: 0 };
+    // Another request is already crawling — wait for it to finish and then
+    // return whatever it cached.
+    return waitForCache(fetcher, league);
   }
 
-  let pagesWalked = 0;
-  let tabsUpserted = 0;
-
+  // ── 3. Cold start: walk PAGES_PER_CRAWL pages and collect stashes ───────
   try {
     let changeId = (await redis.get<string>(CHANGE_ID_KEY)) ?? undefined;
+    const allStashes = new Map<string, StashTab>(); // keyed by tab ID to dedupe
 
-    for (let i = 0; i < PAGES_PER_RUN; i++) {
+    for (let i = 0; i < PAGES_PER_CRAWL; i++) {
       let data: StashData;
       try {
         data = await fetcher(changeId);
       } catch (err) {
-        console.error(`[stash-cache] Fetcher error on page ${i}:`, err);
+        console.error(`[stash-cache] Fetch error on page ${i}:`, err);
         break;
       }
 
       changeId = data.next_change_id;
-      pagesWalked++;
 
-      // Filter to the target league
-      const relevant = data.stashes.filter(
-        (s) => s.league === league && s.public
+      for (const tab of data.stashes) {
+        if (tab.league === league && tab.public) {
+          // If we've seen this tab before in a previous page, merge items
+          // rather than overwriting — the river sends partial updates
+          const existing = allStashes.get(tab.id);
+          if (existing && tab.items.length === 0) {
+            // Delta with no items — keep what we already have
+            allStashes.set(tab.id, { ...tab, items: existing.items });
+          } else {
+            allStashes.set(tab.id, tab);
+          }
+        }
+      }
+
+      console.log(
+        `[stash-cache] Page ${i + 1}/${PAGES_PER_CRAWL}: ${allStashes.size} stashes so far`
       );
 
-      if (relevant.length > 0) {
-        // Upsert each tab individually so we never blow a single Redis value's
-        // 5 MB limit and so reads can be fully pipelined.
-        const pipeline = redis.pipeline();
-        for (const tab of relevant) {
-          pipeline.set(`${STASH_PREFIX}${tab.id}`, JSON.stringify(tab), {
-            ex: STASH_TAB_TTL,
-          });
-        }
-        pipeline.sadd(STASH_INDEX_KEY, relevant.map((t) => t.id));
-        await pipeline.exec();
-        tabsUpserted += relevant.length;
-      }
-
-      // Persist the change ID after every page so a crash mid-run still
-      // advances the river correctly next time.
-      await redis.set(CHANGE_ID_KEY, changeId);
-
-      // Respect the rate limit between pages (skip the sleep on the last page)
-      if (i < PAGES_PER_RUN - 1) await sleep(INTER_PAGE_MS);
-    }
-  } finally {
-    await redis.del(LOCK_KEY);
-  }
-
-  console.log(
-    `[stash-cache] Done: ${pagesWalked} pages, ${tabsUpserted} tabs upserted`
-  );
-  return { pagesWalked, tabsUpserted };
-}
-
-// ─── Reader (called on the request path) ─────────────────────────────────────
-/**
- * Read all accumulated stash tabs from Redis.
- *
- * Uses a single pipelined multi-get so latency is one round-trip regardless of
- * how many tabs are stored.
- */
-export async function getAccumulatedStashes(): Promise<StashTab[]> {
-  const ids = await redis.smembers(STASH_INDEX_KEY);
-  if (!ids.length) return [];
-
-  const pipeline = redis.pipeline();
-  for (const id of ids) pipeline.get(`${STASH_PREFIX}${id}`);
-  const results = await pipeline.exec();
-
-  return (results as (string | null)[])
-    .filter((r): r is string => r !== null)
-    .map((r) => JSON.parse(r) as StashTab);
-}
-
-// ─── Legacy shim (keeps poe-api.ts compiling unchanged) ──────────────────────
-/**
- * Drop-in replacement for the old getCachedPublicStashTabs.
- *
- * Returns a snapshot of whatever is already in Redis without making any new
- * API calls.  after() in page.tsx keeps the store warm after every visit.
- *
- * If the store is empty (cold start on first ever visit) it falls back to a
- * single live fetch so the page never shows nothing.
- */
-export async function getCachedPublicStashTabs(
-  fetcher: (nextChangeId?: string) => Promise<StashData>
-): Promise<{ next_change_id: string; stashes: StashTab[]; fetchedAt: number }> {
-  let stashes = await getAccumulatedStashes();
-
-  // Cold-start fallback: fetch one page live so the dashboard isn't empty
-  if (stashes.length === 0) {
-    console.warn("[stash-cache] Store empty – falling back to single live fetch");
-    const changeId = (await redis.get<string>(CHANGE_ID_KEY)) ?? undefined;
-    const data = await fetcher(changeId);
-
-    // Always advance the change ID, even if this page had no Mirage stashes
-    await redis.set(CHANGE_ID_KEY, data.next_change_id);
-
-    const relevant = data.stashes.filter(
-      (s) => s.league === "Mirage" && s.public
-    );
-
-    // Seed the store so the next read is instant
-    if (relevant.length > 0) {
-      const pipeline = redis.pipeline();
-      for (const tab of relevant) {
-        pipeline.set(`${STASH_PREFIX}${tab.id}`, JSON.stringify(tab), {
-          ex: STASH_TAB_TTL,
-        });
-      }
-      pipeline.sadd(STASH_INDEX_KEY, relevant.map((t) => t.id));
-      await pipeline.exec();
-      await redis.set(CHANGE_ID_KEY, data.next_change_id);
+      if (i < PAGES_PER_CRAWL - 1) await sleep(INTER_PAGE_MS);
     }
 
-    stashes = relevant;
-    return {
-      next_change_id: data.next_change_id,
-      stashes,
+    // Persist the change ID so the next hourly crawl continues from here
+    if (changeId) await redis.set(CHANGE_ID_KEY, changeId);
+
+    const result: StashCache = {
+      next_change_id: changeId ?? "",
+      stashes: Array.from(allStashes.values()),
       fetchedAt: Date.now(),
     };
+
+    await redis.set(CACHE_KEY, result, { ex: CACHE_TTL });
+    return result;
+
+  } finally {
+    // Lock stays in Redis until CACHE_TTL expires — that's intentional.
+    // It prevents re-crawls while the cache is valid. Once the cache expires,
+    // the lock expires too, and the next request will crawl again.
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Spin-waits up to 30s for another in-flight crawl to populate the cache,
+ * then returns whatever was cached. Falls back to a single live fetch if the
+ * cache is still empty after the timeout.
+ */
+async function waitForCache(
+  fetcher: (nextChangeId?: string) => Promise<StashData>,
+  league: string,
+  timeoutMs = 30_000,
+  intervalMs = 1_000
+): Promise<StashCache> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    await sleep(intervalMs);
+    const cached = await redis.get<StashCache>(CACHE_KEY);
+    if (cached) return cached;
   }
 
-  const nextChangeId =
-    (await redis.get<string>(CHANGE_ID_KEY)) ?? "0-0-0";
-
+  // Timeout — fall back to a single live fetch so the page isn't empty
+  console.warn("[stash-cache] Timed out waiting for crawl, falling back to single fetch");
+  const changeId = (await redis.get<string>(CHANGE_ID_KEY)) ?? undefined;
+  const data = await fetcher(changeId);
   return {
-    next_change_id: nextChangeId,
-    stashes,
+    next_change_id: data.next_change_id,
+    stashes: data.stashes.filter((s) => s.league === league && s.public),
     fetchedAt: Date.now(),
   };
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
