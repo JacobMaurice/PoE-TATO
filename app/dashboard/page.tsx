@@ -9,14 +9,6 @@ import ItemSearch from "./ItemSearch";
 
 const LEAGUE = "Mirage"; // hard-coded as mirage league for now
 
-const [profile, stashData] = await Promise.all([
-  getProfile(),
-  getPublicStashTabs(),
-]);
-
-console.log("stash tab count:", stashData.stashes.length);
-console.log("total items:", stashData.stashes.reduce((n, s) => n + (s.items as any[]).length, 0));
-
 export default async function Dashboard() {
   const cookieStore = await cookies();
   const token = cookieStore.get("poe_access_token");
@@ -26,6 +18,9 @@ export default async function Dashboard() {
     getProfile(),
     getPublicStashTabs(),
   ]);
+
+  console.log("stash tab count:", stashData.stashes.length);
+  console.log("total items:", stashData.stashes.reduce((n, s) => n + (s.items as any[]).length, 0));
 
   const leagueItems = stashData.stashes
     .filter((s) => s.league === LEAGUE && s.public)
