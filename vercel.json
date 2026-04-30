@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/stash",
-      "schedule": "0 16 * * *"
-    }
-  ]
-}

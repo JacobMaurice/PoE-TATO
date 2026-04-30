@@ -1,7 +1,9 @@
 // app/dashboard/page.tsx
+import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getProfile, getPublicStashTabs } from "@/lib/poe-api";
+import { getProfile, getPublicStashTabs, getPublicStashTabsFetcher } from "@/lib/poe-api";
+import { accumulateStashes } from "@/lib/stash-cache";
 import StashButton from "./StashButton";
 import ItemSearch from "./ItemSearch";
 
@@ -26,6 +28,13 @@ export default async function Dashboard() {
         stashName: s.stash,
       }))
     );
+
+  // After the response is sent, silently walk the next 10 river pages.
+  // The distributed lock in accumulateStashes ensures only one run proceeds
+  // even if multiple users hit the dashboard concurrently.
+  after(async () => {
+    await accumulateStashes(getPublicStashTabsFetcher());
+  });
 
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 760, margin: "80px auto", padding: "0 1rem" }}>

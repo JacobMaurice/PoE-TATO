@@ -19,7 +19,7 @@ const LOCK_KEY        = "poe:stash:accumulate:lock";
  * so 10 pages/invocation is safe if you invoke at most once per ~15 s.
  * Tune INTER_PAGE_MS up if you ever receive 429s.
  */
-const PAGES_PER_RUN   = 6;
+const PAGES_PER_RUN   = 10;
 const INTER_PAGE_MS   = 1_500; // 1.5 s between requests ≈ 40 req/min max
 const STASH_TAB_TTL   = 60 * 60; // 1 h – tabs evicted if not seen for an hour
 const LOCK_TTL        = 60;       // seconds – prevents overlapping cron runs
@@ -40,14 +40,14 @@ type StashData = {
   stashes: StashTab[];
 };
 
-// ─── Accumulator (called by cron) ────────────────────────────────────────────
+// ─── Accumulator (called via after() on the request path) ────────────────────
 /**
  * Walk PAGES_PER_RUN pages of the public stash river, upserting each Mirage
  * stash tab into Redis individually.  Only one instance runs at a time thanks
  * to a distributed SET NX lock.
  *
- * Call this from a Vercel Cron route (or any background worker) – NOT from the
- * request path.
+ * Intended to be called inside Next.js after() so it runs after the response
+ * is flushed — the user sees no added latency.
  *
  * @param fetcher  The same fetcher you already pass in poe-api.ts
  * @param league   League to keep (default "Mirage")
@@ -142,10 +142,10 @@ export async function getAccumulatedStashes(): Promise<StashTab[]> {
  * Drop-in replacement for the old getCachedPublicStashTabs.
  *
  * Returns a snapshot of whatever is already in Redis without making any new
- * API calls.  The cron accumulator keeps the store warm.
+ * API calls.  after() in page.tsx keeps the store warm after every visit.
  *
- * If the store is empty (cold start before the first cron tick) it falls back
- * to a single live fetch so the page never shows nothing.
+ * If the store is empty (cold start on first ever visit) it falls back to a
+ * single live fetch so the page never shows nothing.
  */
 export async function getCachedPublicStashTabs(
   fetcher: (nextChangeId?: string) => Promise<StashData>
