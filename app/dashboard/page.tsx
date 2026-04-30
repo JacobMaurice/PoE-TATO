@@ -27,6 +27,9 @@ export default async function Dashboard() {
     }))
   );
 
+  console.log("stash tab count:", stashData.stashes.length);
+  console.log("total items:", stashData.stashes.reduce((n, s) => n + (s.items as any[]).length, 0));
+
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 760, margin: "80px auto", padding: "0 1rem" }}>
       <h1>Welcome, {profile.name}!</h1>
