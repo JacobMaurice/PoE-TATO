@@ -13,7 +13,7 @@ const LOCK_KEY                 = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
 const PAGES_PER_CRAWL      = 5;
-const CACHE_TTL            = 3_600;          // 1 hour — tabs and crawl timestamp expire together
+const CACHE_TTL            = 3_600;
 const LOCK_TTL             = CACHE_TTL;
 const CHANGE_ID_MAX_AGE_MS = 60 * 60 * 1_000; // 1 hour
 
@@ -120,9 +120,8 @@ export async function getCachedPublicStashTabs(
 
 /**
  * Fetches the latest next_change_id from poe.ninja/stats.
- * poe.ninja is a Next.js app — the data is embedded in a __NEXT_DATA__ JSON
- * blob so no headless browser is needed, just a plain fetch + regex parse.
- * Returns null on any failure so callers can fall back gracefully.
+ * Logs the HTTP status and the first 500 chars of the response body so we can
+ * diagnose failures without guessing what the page returns.
  */
 async function scrapeChangeIdFromNinja(): Promise<string | null> {
   try {
@@ -133,55 +132,51 @@ async function scrapeChangeIdFromNinja(): Promise<string | null> {
           "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         Accept: "text/html",
       },
-      // Next.js fetch: skip the data cache so we always get a fresh page
       cache: "no-store",
     });
 
-    if (!res.ok) {
-      console.error(`[stash-cache] poe.ninja/stats returned HTTP ${res.status}`);
-      return null;
-    }
-
     const html = await res.text();
 
-    // Pull the JSON blob that Next.js inlines as <script id="__NEXT_DATA__">
-    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (!match) {
-      console.error("[stash-cache] __NEXT_DATA__ script tag not found on poe.ninja/stats");
-      return null;
+    console.log(
+      `[stash-cache] poe.ninja/stats → HTTP ${res.status}, ` +
+      `body preview: ${html.slice(0, 500).replace(/\s+/g, " ")}`
+    );
+
+    if (!res.ok) return null;
+
+    // Try __NEXT_DATA__ (Next.js SSR)
+    const nextDataMatch = html.match(
+      /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/
+    );
+    if (nextDataMatch) {
+      const id = deepFind(JSON.parse(nextDataMatch[1]), "next_change_id");
+      if (typeof id === "string" && id) return id;
+      console.error("[stash-cache] __NEXT_DATA__ found but next_change_id missing");
     }
 
-    const nextData = JSON.parse(match[1]);
+    // Try any inline JSON blob containing next_change_id
+    const jsonMatch = html.match(/"next_change_id"\s*:\s*"([^"]+)"/);
+    if (jsonMatch) return jsonMatch[1];
 
-    // Primary path — adjust if poe.ninja restructures their page props
-    const id: unknown =
-      nextData?.props?.pageProps?.stats?.next_change_id ??
-      deepFind(nextData, "next_change_id");
-
-    if (typeof id !== "string" || !id) {
-      console.error("[stash-cache] next_change_id not found in __NEXT_DATA__");
-      return null;
-    }
-
-    return id;
+    console.error("[stash-cache] next_change_id not found in poe.ninja/stats response");
+    return null;
   } catch (err) {
-    console.error("[stash-cache] Failed to scrape change ID from poe.ninja:", err);
+    console.error("[stash-cache] Failed to fetch poe.ninja/stats:", err);
     return null;
   }
 }
 
 /** Recursively finds the first value for `key` in a nested object/array. */
 function deepFind(obj: unknown, key: string): unknown {
-  if (obj && typeof obj === "object") {
-    if (key in (obj as Record<string, unknown>)) {
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    if (key in (obj as Record<string, unknown>))
       return (obj as Record<string, unknown>)[key];
-    }
     for (const v of Object.values(obj as Record<string, unknown>)) {
       const found = deepFind(v, key);
       if (found !== undefined) return found;
     }
   } else if (Array.isArray(obj)) {
-    for (const item of obj as unknown[]) {
+    for (const item of obj) {
       const found = deepFind(item, key);
       if (found !== undefined) return found;
     }
@@ -203,7 +198,7 @@ async function getNextChangeId(): Promise<string | undefined> {
 
   const ageMs = fetchedAt ? Date.now() - fetchedAt : Infinity;
   if (storedId && ageMs < CHANGE_ID_MAX_AGE_MS) {
-    return storedId; // still fresh
+    return storedId;
   }
 
   console.log(
