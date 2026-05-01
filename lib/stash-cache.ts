@@ -11,7 +11,7 @@ const CRAWLED_AT_KEY  = "poe:stash:crawled_at";
 const LOCK_KEY        = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
-const PAGES_PER_CRAWL = 4;
+const PAGES_PER_CRAWL = 6;
 const CACHE_TTL       = 3_600; // 1 hour — tabs and crawl timestamp expire together
 const LOCK_TTL        = CACHE_TTL;
 
