@@ -6,16 +6,14 @@ const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TO
 // ─── Keys ────────────────────────────────────────────────────────────────────
 const STASH_INDEX_KEY = "poe:stash:index";  // Redis Set of all known tab IDs
 const STASH_PREFIX    = "poe:stash:tab:";   // poe:stash:tab:<id> → JSON StashTab
-const CHANGE_ID_KEY            = "poe:stash:next_change_id";
-const CHANGE_ID_FETCHED_AT_KEY = "poe:stash:change_id_fetched_at";
-const CRAWLED_AT_KEY           = "poe:stash:crawled_at";
-const LOCK_KEY                 = "poe:stash:lock";
+const CHANGE_ID_KEY   = "poe:stash:next_change_id";
+const CRAWLED_AT_KEY  = "poe:stash:crawled_at";
+const LOCK_KEY        = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
-const PAGES_PER_CRAWL      = 5;
-const CACHE_TTL            = 3_600;
-const LOCK_TTL             = CACHE_TTL;
-const CHANGE_ID_MAX_AGE_MS = 60 * 60 * 1_000; // 1 hour
+const PAGES_PER_CRAWL = 5;
+const CACHE_TTL       = 3_600; // 1 hour — tabs and crawl timestamp expire together
+const LOCK_TTL        = CACHE_TTL;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type StashTab = {
@@ -64,7 +62,7 @@ export async function getCachedPublicStashTabs(
   }
 
   // ── 3. Cold crawl ───────────────────────────────────────────────────────
-  let changeId = await getNextChangeId();
+  let changeId = (await redis.get<string>(CHANGE_ID_KEY)) ?? undefined;
 
   for (let i = 0; i < PAGES_PER_CRAWL; i++) {
     let data: StashData;
@@ -101,12 +99,7 @@ export async function getCachedPublicStashTabs(
     console.log(`[stash-cache] Page ${i + 1}/${PAGES_PER_CRAWL} done, changeId: ${changeId}`);
   }
 
-  if (changeId) {
-    await Promise.all([
-      redis.set(CHANGE_ID_KEY, changeId),
-      redis.set(CHANGE_ID_FETCHED_AT_KEY, Date.now()),
-    ]);
-  }
+  if (changeId) await redis.set(CHANGE_ID_KEY, changeId);
 
   // Mark the store as fresh — this key expiring is what triggers the next crawl
   const now = Date.now();
@@ -117,108 +110,6 @@ export async function getCachedPublicStashTabs(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Fetches the latest next_change_id from poe.ninja/stats.
- * Logs the HTTP status and the first 500 chars of the response body so we can
- * diagnose failures without guessing what the page returns.
- */
-async function scrapeChangeIdFromNinja(): Promise<string | null> {
-  try {
-    const res = await fetch("https://poe.ninja/stats", {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Accept: "text/html",
-      },
-      cache: "no-store",
-    });
-
-    const html = await res.text();
-
-    console.log(
-      `[stash-cache] poe.ninja/stats → HTTP ${res.status}, ` +
-      `body preview: ${html.slice(0, 500).replace(/\s+/g, " ")}`
-    );
-
-    if (!res.ok) return null;
-
-    // Try __NEXT_DATA__ (Next.js SSR)
-    const nextDataMatch = html.match(
-      /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/
-    );
-    if (nextDataMatch) {
-      const id = deepFind(JSON.parse(nextDataMatch[1]), "next_change_id");
-      if (typeof id === "string" && id) return id;
-      console.error("[stash-cache] __NEXT_DATA__ found but next_change_id missing");
-    }
-
-    // Try any inline JSON blob containing next_change_id
-    const jsonMatch = html.match(/"next_change_id"\s*:\s*"([^"]+)"/);
-    if (jsonMatch) return jsonMatch[1];
-
-    console.error("[stash-cache] next_change_id not found in poe.ninja/stats response");
-    return null;
-  } catch (err) {
-    console.error("[stash-cache] Failed to fetch poe.ninja/stats:", err);
-    return null;
-  }
-}
-
-/** Recursively finds the first value for `key` in a nested object/array. */
-function deepFind(obj: unknown, key: string): unknown {
-  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-    if (key in (obj as Record<string, unknown>))
-      return (obj as Record<string, unknown>)[key];
-    for (const v of Object.values(obj as Record<string, unknown>)) {
-      const found = deepFind(v, key);
-      if (found !== undefined) return found;
-    }
-  } else if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const found = deepFind(item, key);
-      if (found !== undefined) return found;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Returns the best next_change_id to seed the crawl with:
- *  - Stored ID is < 1 hour old  → reuse it (no scrape).
- *  - Stored ID is missing/stale → scrape poe.ninja/stats and persist the result.
- *  - Scrape fails               → fall back to the stale stored ID (or undefined).
- */
-async function getNextChangeId(): Promise<string | undefined> {
-  const [storedId, fetchedAt] = await Promise.all([
-    redis.get<string>(CHANGE_ID_KEY),
-    redis.get<number>(CHANGE_ID_FETCHED_AT_KEY),
-  ]);
-
-  const ageMs = fetchedAt ? Date.now() - fetchedAt : Infinity;
-  if (storedId && ageMs < CHANGE_ID_MAX_AGE_MS) {
-    return storedId;
-  }
-
-  console.log(
-    storedId
-      ? `[stash-cache] change ID is ${Math.round(ageMs / 60_000)} min old — refreshing from poe.ninja`
-      : "[stash-cache] No stored change ID — fetching from poe.ninja"
-  );
-
-  const freshId = await scrapeChangeIdFromNinja();
-  if (freshId) {
-    await Promise.all([
-      redis.set(CHANGE_ID_KEY, freshId),
-      redis.set(CHANGE_ID_FETCHED_AT_KEY, Date.now()),
-    ]);
-    return freshId;
-  }
-
-  console.warn("[stash-cache] Falling back to stale change ID:", storedId ?? "none");
-  return storedId ?? undefined;
-}
 
 /** Read every tab from Redis in a single pipelined round-trip. */
 async function readAllTabs(): Promise<StashTab[]> {
