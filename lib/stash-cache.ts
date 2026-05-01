@@ -1,28 +1,21 @@
 // lib/stash-cache.ts
-import { execFile } from "child_process";
-import path from "path";
-import { promisify } from "util";
-
 import { Redis } from "@upstash/redis";
-
-const execFileAsync = promisify(execFile);
-const SCRAPER_PATH = path.resolve(process.cwd(), "scripts/scrape_change_id.py");
 
 const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN
 
 // ─── Keys ────────────────────────────────────────────────────────────────────
 const STASH_INDEX_KEY = "poe:stash:index";  // Redis Set of all known tab IDs
 const STASH_PREFIX    = "poe:stash:tab:";   // poe:stash:tab:<id> → JSON StashTab
-const CHANGE_ID_KEY          = "poe:stash:next_change_id";
+const CHANGE_ID_KEY            = "poe:stash:next_change_id";
 const CHANGE_ID_FETCHED_AT_KEY = "poe:stash:change_id_fetched_at";
-const CRAWLED_AT_KEY         = "poe:stash:crawled_at";
-const LOCK_KEY        = "poe:stash:lock";
+const CRAWLED_AT_KEY           = "poe:stash:crawled_at";
+const LOCK_KEY                 = "poe:stash:lock";
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
-const PAGES_PER_CRAWL        = 5;
-const CACHE_TTL              = 3_600; // 1 hour — tabs and crawl timestamp expire together
-const LOCK_TTL               = CACHE_TTL;
-const CHANGE_ID_MAX_AGE_MS   = 60 * 60 * 1_000; // 1 hour
+const PAGES_PER_CRAWL      = 5;
+const CACHE_TTL            = 3_600;          // 1 hour — tabs and crawl timestamp expire together
+const LOCK_TTL             = CACHE_TTL;
+const CHANGE_ID_MAX_AGE_MS = 60 * 60 * 1_000; // 1 hour
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type StashTab = {
@@ -126,21 +119,74 @@ export async function getCachedPublicStashTabs(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Shells out to the Python scraper to fetch the latest next_change_id from
- * poe.ninja/stats. Returns null on any failure so callers can fall back
- * gracefully to the stored ID.
+ * Fetches the latest next_change_id from poe.ninja/stats.
+ * poe.ninja is a Next.js app — the data is embedded in a __NEXT_DATA__ JSON
+ * blob so no headless browser is needed, just a plain fetch + regex parse.
+ * Returns null on any failure so callers can fall back gracefully.
  */
 async function scrapeChangeIdFromNinja(): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("python3", [SCRAPER_PATH], {
-      timeout: 15_000,
+    const res = await fetch("https://poe.ninja/stats", {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "text/html",
+      },
+      // Next.js fetch: skip the data cache so we always get a fresh page
+      cache: "no-store",
     });
-    const id = stdout.trim();
-    return id.length > 0 ? id : null;
+
+    if (!res.ok) {
+      console.error(`[stash-cache] poe.ninja/stats returned HTTP ${res.status}`);
+      return null;
+    }
+
+    const html = await res.text();
+
+    // Pull the JSON blob that Next.js inlines as <script id="__NEXT_DATA__">
+    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!match) {
+      console.error("[stash-cache] __NEXT_DATA__ script tag not found on poe.ninja/stats");
+      return null;
+    }
+
+    const nextData = JSON.parse(match[1]);
+
+    // Primary path — adjust if poe.ninja restructures their page props
+    const id: unknown =
+      nextData?.props?.pageProps?.stats?.next_change_id ??
+      deepFind(nextData, "next_change_id");
+
+    if (typeof id !== "string" || !id) {
+      console.error("[stash-cache] next_change_id not found in __NEXT_DATA__");
+      return null;
+    }
+
+    return id;
   } catch (err) {
     console.error("[stash-cache] Failed to scrape change ID from poe.ninja:", err);
     return null;
   }
+}
+
+/** Recursively finds the first value for `key` in a nested object/array. */
+function deepFind(obj: unknown, key: string): unknown {
+  if (obj && typeof obj === "object") {
+    if (key in (obj as Record<string, unknown>)) {
+      return (obj as Record<string, unknown>)[key];
+    }
+    for (const v of Object.values(obj as Record<string, unknown>)) {
+      const found = deepFind(v, key);
+      if (found !== undefined) return found;
+    }
+  } else if (Array.isArray(obj)) {
+    for (const item of obj as unknown[]) {
+      const found = deepFind(item, key);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -175,7 +221,6 @@ async function getNextChangeId(): Promise<string | undefined> {
     return freshId;
   }
 
-  // Scrape failed — use whatever we have (may be stale or undefined).
   console.warn("[stash-cache] Falling back to stale change ID:", storedId ?? "none");
   return storedId ?? undefined;
 }
